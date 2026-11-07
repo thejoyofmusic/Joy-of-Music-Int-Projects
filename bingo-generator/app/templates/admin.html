@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin console · Carnatic Bingo</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #f4f6f8; color: #243b53; }
+        .container { max-width: 1050px; margin: 0 auto; }
+        .toolbar {
+            display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+            gap: 10px; margin-bottom: 18px; font-size: 13px;
+        }
+        .toolbar .who { color: #627d98; }
+        .toolbar a { color: #0066cc; text-decoration: underline; }
+        h1 { font-size: 23px; margin: 0 0 6px; }
+        .intro { margin: 0 0 20px; font-size: 13px; color: #627d98; line-height: 1.6; }
+        .stats { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 22px; }
+        .stat {
+            flex: 1 1 150px; background: #fff; border: 1px solid #d9e2ec; border-radius: 8px; padding: 12px 14px;
+        }
+        .stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #829ab1; }
+        .stat .value { font-size: 22px; font-weight: 700; margin-top: 2px; }
+        .panel { background: #fff; border: 1px solid #d9e2ec; border-radius: 10px; padding: 18px; margin-bottom: 22px; }
+        .panel h2 { margin: 0 0 4px; font-size: 16px; }
+        .panel .hint { margin: 0 0 14px; font-size: 12px; color: #829ab1; line-height: 1.5; }
+        .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+        .field { min-width: 0; }
+        .field label { display: block; font-size: 11px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: #627d98; margin-bottom: 4px; }
+        .field input, .field select {
+            width: 100%; padding: 8px; border: 1px solid #cbd2d9; border-radius: 4px; font-size: 13px; background: #fff;
+        }
+        .field input:focus, .field select:focus { outline: 2px solid #9fb3c8; outline-offset: 1px; border-color: #627d98; }
+        .row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
+        .btn {
+            display: inline-block; padding: 9px 16px; border-radius: 5px; border: 1px solid #0066cc;
+            background: #0066cc; color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: none;
+        }
+        .btn.secondary { background: #fff; color: #0066cc; }
+        .btn.danger { background: #c53030; border-color: #c53030; padding: 4px 10px; font-size: 12px; }
+        td form { margin: 0; }
+        .protected { font-size: 12px; color: #829ab1; }
+        .delete-opt { display: block; font-size: 11px; color: #627d98; margin-bottom: 5px; }
+        .btn:hover { filter: brightness(.95); }
+        .search { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+        .search input[type="search"] {
+            flex: 1 1 240px; min-width: 0; padding: 9px; border: 1px solid #cbd2d9; border-radius: 4px; font-size: 13px;
+        }
+        .search .meta { font-size: 12px; color: #829ab1; }
+        .table-wrap { overflow-x: auto; border: 1px solid #d9e2ec; border-radius: 8px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 720px; }
+        thead th {
+            text-align: left; padding: 10px 12px; background: #f0f4f8; font-size: 11px;
+            text-transform: uppercase; letter-spacing: .04em; color: #627d98; border-bottom: 1px solid #d9e2ec;
+        }
+        tbody td { padding: 10px 12px; border-bottom: 1px solid #edf2f7; vertical-align: top; }
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr:hover { background: #f8fafc; }
+        .sid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+        .pill {
+            display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px;
+            background: #e3f2fd; color: #0052a3; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .pill.none { background: #f0f4f8; color: #829ab1; }
+        td .links { white-space: nowrap; }
+        td .links a { color: #0066cc; text-decoration: underline; font-size: 12px; }
+        .empty { padding: 26px 16px; text-align: center; color: #829ab1; font-size: 13px; }
+        .note { margin: 12px 0 0; font-size: 12px; color: #829ab1; line-height: 1.6; }
+        .notice { margin: 10px 0 0; padding: 8px 10px; border-radius: 4px; font-size: 13px; background: #fffbea; color: #8d2b0b; border: 1px solid #f0b429; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="toolbar">
+            <div class="who">Signed in as <strong>{{ user.email }}</strong> (admin)</div>
+            <div><a href="/auth/logout">Sign out</a></div>
+        </div>
+
+        <h1>Admin console</h1>
+        <p class="intro">
+            Add a student with their Google email, and they can sign in at
+            <strong>/auth/login</strong> and land on their own dashboard.
+        </p>
+
+        {# Stats row hidden for now — re-enable by removing this Jinja comment.
+        <div class="stats">
+            <div class="stat"><div class="label">Sheets</div><div class="value">{{ total_sheets }}</div></div>
+            <div class="stat"><div class="label">Assigned</div><div class="value">{{ assigned_sheets }}</div></div>
+            <div class="stat"><div class="label">Accounts</div><div class="value">{{ accounts|length }}</div></div>
+            {% if admin_emails %}
+            <div class="stat"><div class="label">ADMIN_EMAILS</div><div class="value" style="font-size:12px;font-weight:600;line-height:1.5;">{{ admin_emails|join(', ') }}</div></div>
+            {% endif %}
+        </div>
+        #}
+
+        {% if added %}
+        <div class="notice" style="border-color:#38a169;background:#f0fff4;color:#22543d;">
+            Student added. Sheet <strong>{{ added }}</strong> is assigned and ready for their Google sign-in.
+        </div>
+        {% endif %}
+        {% if removed %}
+        <div class="notice" style="border-color:#38a169;background:#f0fff4;color:#22543d;">
+            Removed <strong>{{ removed }}</strong>.{% if deleted %} Deleted {{ deleted }} board{{ '' if deleted == 1 else 's' }}.{% else %} Their boards are kept but are now admin-only.{% endif %}
+        </div>
+        {% endif %}
+
+        <div class="panel">
+            <h2>Add a student</h2>
+            <p class="hint">
+                Type the student's Google email — that is all that is required. An account and a fresh board are
+                created and assigned to that address, so sign-in with Google works for them straight away.
+                Parent details are optional and can be filled in later.
+            </p>
+            <form method="post" action="/admin/students">
+                <div class="field-grid">
+                    <div class="field">
+                        <label for="new_email">Student's Google email</label>
+                        <input type="email" id="new_email" name="email" required placeholder="student@gmail.com">
+                    </div>
+                    <div class="field">
+                        <label for="new_student_name">Student name (optional)</label>
+                        <input type="text" id="new_student_name" name="student_name" placeholder="Defaults to the name before @">
+                    </div>
+                    <div class="field">
+                        <label for="new_parent_name">Parent name (optional)</label>
+                        <input type="text" id="new_parent_name" name="parent_name">
+                    </div>
+                    <div class="field">
+                        <label for="new_parent_email">Parent email (optional)</label>
+                        <input type="email" id="new_parent_email" name="parent_email">
+                    </div>
+                    <div class="field">
+                        <label for="new_parent_whatsapp">Parent WhatsApp (optional)</label>
+                        <input type="tel" id="new_parent_whatsapp" name="parent_whatsapp">
+                    </div>
+                </div>
+                <div class="row-actions">
+                    <button type="submit" class="btn">Add student</button>
+                    <span class="meta" style="font-size:12px;color:#829ab1;">Adds the account plus one board.</span>
+                </div>
+            </form>
+        </div>
+
+        <div class="panel">
+            <h2>Students</h2>
+            <p class="hint">
+                Removing a student detaches their boards, so signing in with Google again does not
+                restore access. Tick "delete boards" to remove their sheets as well. Administrator
+                accounts cannot be removed here.
+            </p>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Email</th>
+                            <th>Role</th>
+                            <th>Boards</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for account in accounts %}
+                        <tr>
+                            <td>{{ account.email }}</td>
+                            <td>{{ account.role }}</td>
+                            <td>{{ board_counts.get(account.email, 0) }}</td>
+                            <td>
+                                {% if account.role == 'admin' %}
+                                <span class="protected">protected</span>
+                                {% else %}
+                                <form method="post" action="/admin/students/remove"
+                                      onsubmit="return confirm('Remove {{ account.email }}?');">
+                                    <input type="hidden" name="email" value="{{ account.email }}">
+                                    {% if board_counts.get(account.email, 0) %}
+                                    <label class="delete-opt">
+                                        <input type="checkbox" name="delete_sheets" value="1">
+                                        also delete {{ board_counts.get(account.email, 0) }} board{{ '' if board_counts.get(account.email, 0) == 1 else 's' }}
+                                    </label>
+                                    {% endif %}
+                                    <button type="submit" class="btn danger">Remove</button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="empty">No accounts yet.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        {# Create-a-sheet and assign-existing panels hidden for now; "Add a student" above
+           covers both jobs. Re-enable by removing these Jinja comments.
+        <div class="panel">
+            <h2>Create a bingo sheet</h2>
+            <p class="hint">A fresh board is drawn from the clue and MCQ pools. Leave the sheet ID blank to auto-generate one.</p>
+            <form method="post" action="/admin/sheets">
+                <div class="field-grid">
+                    <div class="field">
+                        <label for="student_name">Student name</label>
+                        <input type="text" id="student_name" name="student_name" required>
+                    </div>
+                    <div class="field">
+                        <label for="parent_name">Parent name</label>
+                        <input type="text" id="parent_name" name="parent_name" required>
+                    </div>
+                    <div class="field">
+                        <label for="parent_email">Parent email</label>
+                        <input type="email" id="parent_email" name="parent_email" required>
+                    </div>
+                    <div class="field">
+                        <label for="parent_whatsapp">Parent WhatsApp</label>
+                        <input type="tel" id="parent_whatsapp" name="parent_whatsapp" required placeholder="+15550109999">
+                    </div>
+                    <div class="field">
+                        <label for="assigned_email">Assign to Gmail</label>
+                        <input type="email" id="assigned_email" name="assigned_email" placeholder="student@gmail.com">
+                    </div>
+                    <div class="field">
+                        <label for="sheet_id">Sheet ID (optional)</label>
+                        <input type="text" id="sheet_id" name="sheet_id" placeholder="{{ suggested_sheet_id }}" pattern="[A-Za-z0-9][A-Za-z0-9_-]{1,31}">
+                    </div>
+                </div>
+                <div class="row-actions">
+                    <button type="submit" class="btn">Create sheet</button>
+                    <span class="meta" style="font-size:12px;color:#829ab1;">The sheet opens on its detail page after creation.</span>
+                </div>
+            </form>
+        </div>
+
+        <div class="panel">
+            <h2>Assign an existing sheet</h2>
+            <p class="hint">Use this to give an already-generated sheet to another account, or to move it between students.</p>
+            <form method="post" action="/admin/sheets/assign">
+                <div class="field-grid">
+                    <div class="field">
+                        <label for="assign_sheet">Sheet</label>
+                        <select id="assign_sheet" name="sheet_id" required>
+                            {% for row in sheets %}
+                            <option value="{{ row.sheet_id }}">{{ row.sheet_id }} — {{ row.student_name }}{% if row.assigned_email %} ({{ row.assigned_email }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="assign_email">Assign to Gmail</label>
+                        <input type="email" id="assign_email" name="assigned_email" placeholder="student@gmail.com">
+                    </div>
+                </div>
+                <div class="row-actions">
+                    <button type="submit" class="btn">Save assignment</button>
+                    <span class="meta" style="font-size:12px;color:#829ab1;">Blank removes the assignment, leaving the sheet admin-only.</span>
+                </div>
+            </form>
+            {% if not sheets %}
+            <div class="notice">No sheets exist yet — create one above first.</div>
+            {% endif %}
+        </div>
+        #}
+
+        <div class="panel">
+            <h2>All sheets</h2>
+            <form class="search" method="get" action="/admin">
+                <input type="search" name="q" value="{{ query }}" placeholder="Search by sheet ID, e.g. CB-9F3A1B" aria-label="Search by sheet ID">
+                <button type="submit" class="btn">Search</button>
+                {% if query %}<a class="btn secondary" href="/admin">Clear</a>{% endif %}
+                <span class="meta">
+                    {% if query %}{{ matched }} match{{ '' if matched == 1 else 'es' }} for “{{ query }}”{% else %}{{ total_sheets }} sheet{{ '' if total_sheets == 1 else 's' }}{% endif %}
+                </span>
+            </form>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Sheet ID</th>
+                            <th>Student</th>
+                            <th>Parent email</th>
+                            <th>Assigned to</th>
+                            <th>MCQ</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in sheets %}
+                        <tr>
+                            <td class="sid">{{ row.sheet_id }}</td>
+                            <td>{{ row.student_name }}<br><span style="font-size:11px;color:#829ab1;">{{ row.parent_name }}</span></td>
+                            <td>{{ row.parent_email }}</td>
+                            <td>
+                                {% if row.assigned_email %}
+                                <span class="pill" title="{{ row.assigned_email }}">{{ row.assigned_email }}</span>
+                                {% else %}
+                                <span class="pill none">Unassigned</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ row.multiple_choice_question_id }}</td>
+                            <td class="links">
+                                <a href="/admin/sheet/{{ row.sheet_id }}">Open</a> ·
+                                <a href="/sheet/{{ row.sheet_id }}/download">.docx</a>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="6" class="empty">No sheets match this search.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <p class="note">
+                Students you add above appear here straight away. An assignment alone is enough to grant access.
+            </p>
+        </div>
+    </div>
+</body>
+</html>
