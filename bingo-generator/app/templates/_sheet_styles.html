@@ -1,0 +1,153 @@
+{# Shared board + MCQ styles. Include inside a <style> block. #}
+        /* ---- Bingo grid: responsive square cells ---- */
+        .grid-display {
+            margin: 20px auto;
+            border: 3px solid #333;
+            padding: 8px;
+            border-radius: 8px;
+            max-width: 780px;
+            background: #fff;
+        }
+        .grid-wrapper {
+            display: grid;
+            grid-template-columns: 1.6rem repeat(5, minmax(0, 1fr));
+            gap: 5px;
+            width: 100%;
+        }
+
+        .cell { min-width: 0; min-height: 0; }
+
+        /* Column headers / row labels */
+        .cell.header,
+        .cell.label {
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            padding-top: 2px;
+            font-size: 12px;
+            font-weight: 700;
+            color: #666;
+            line-height: 1.2;
+        }
+        .cell.header { border-bottom: 2px solid #333; padding-bottom: 4px; }
+        .cell.label { align-items: center; padding-top: 0; }
+
+        /* Clue cells: fixed proportions (square), scrolling text */
+        .cell.clue {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            aspect-ratio: 1 / 1;
+            padding: 20px 5px 5px; /* top padding reserves room for the badge */
+            border: 2px solid #333;
+            border-radius: 6px;
+            background: #e3f2fd;
+            overflow: hidden;
+        }
+        .cell.clue.marked {
+            background: #a3e9a7;
+            border-color: #2e7d32;
+        }
+        .cell.clue.marked .clue-text { color: #1b5e20; }
+        .cell.clue.marked .coord-badge { background: #1b5e20; }
+        .cell.clue.interactive { cursor: pointer; }
+        .cell.clue.interactive:hover { border-color: #0066cc; }
+        .cell.clue.interactive:focus-visible {
+            outline: 3px solid #0066cc;
+            outline-offset: 2px;
+        }
+
+        /* Coordinate badge (A1, B2, ...) pinned to the top-left corner */
+        .coord-badge {
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            padding: 0 4px;
+            font-size: 9px;
+            font-weight: 700;
+            line-height: 1.5;
+            letter-spacing: .02em;
+            color: #fff;
+            background: #37474f;
+            border-radius: 3px;
+            pointer-events: none;
+        }
+
+        /* Clue text stays inside the cell and scrolls when it is long */
+        .clue-text {
+            margin: auto 0;
+            max-width: 100%;
+            max-height: 100%;
+            overflow-y: auto;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+            text-align: center;
+            font-size: 11px;
+            line-height: 1.25;
+            color: #102a43;
+            scrollbar-width: thin;
+        }
+
+        .cell.free-space {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            aspect-ratio: 1 / 1;
+            border: 2px solid #333;
+            border-radius: 6px;
+            background: #ffeb3b;
+            font-size: 12px;
+            font-weight: 700;
+            text-align: center;
+            padding: 4px;
+            transition: background-color .2s ease, color .2s ease;
+        }
+        .cell.free-space.unlocked { background: #a3e9a7; color: #1b5e20; }
+
+        /* ---- MCQ panel ---- */
+        .mc-question { margin: 20px 0; padding: 20px; background: #e8f5e9; border-radius: 8px; border: 1px solid #c8e6c9; }
+        .mc-title { margin: 0 0 10px; font-weight: 700; }
+        .mc-text { margin: 0 0 12px; line-height: 1.4; }
+        .option-btn {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            width: 100%;
+            padding: 8px;
+            margin: 3px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #fff;
+            text-align: left;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .option-btn:hover { border-color: #4caf50; }
+        .option-btn input { margin-top: 2px; flex: none; }
+        .option-letter { font-weight: 700; flex: none; }
+        .option-btn.correct { background: #c8e6c9; border-color: #a3e9a7; }
+        .option-btn.incorrect { background: #ffcdd2; border-color: #ef9a9a; }
+        .submit-btn {
+            width: 100%;
+            padding: 8px;
+            margin: 8px 0 0;
+            border: 2px solid #4caf50;
+            border-radius: 4px;
+            color: #fff;
+            background: #4caf50;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .submit-btn:hover { background: #45a049; }
+        .success-message { margin: 10px 0 0; padding: 8px; background: #c8e6c9; color: #1b5e20; border: 1px solid #a3e9a7; border-radius: 4px; display: none; }
+        .error-message { margin: 10px 0 0; padding: 8px; background: #ffcdd2; color: #c62828; border: 1px solid #ef9a9a; border-radius: 4px; display: none; }
+        .mc-key { margin: 10px 0 0; font-size: 12px; color: #2e7d32; }
+
+        @media (max-width: 560px) {
+            .grid-display { padding: 5px; }
+            .grid-wrapper { gap: 3px; grid-template-columns: 1rem repeat(5, minmax(0, 1fr)); }
+            .cell.clue { padding-top: 17px; }
+            .clue-text { font-size: 9px; }
+            .coord-badge { font-size: 8px; padding: 0 3px; }
+        }

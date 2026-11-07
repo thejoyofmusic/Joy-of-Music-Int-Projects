@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bingo Sheet {{ sheet.sheet_id }} · Carnatic Bingo</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; color: #333; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .toolbar {
+            display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+            gap: 10px; margin-bottom: 14px; font-size: 13px;
+        }
+        .toolbar a { color: #0066cc; text-decoration: underline; }
+        .toolbar .who { color: #666; }
+        h1 { text-align: center; color: #333; font-size: 22px; margin: 6px 0 18px; }
+        .sheet-info { background: white; padding: 18px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ddd; }
+        .sheet-info h2 { margin: 0 0 12px; font-size: 17px; }
+        .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px 18px; margin: 0 0 14px; }
+        .meta div { font-size: 13px; line-height: 1.4; }
+        .meta dt { color: #7b8794; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+        .meta dd { margin: 0; }
+        .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .btn, .download-btn {
+            display: inline-block; padding: 8px 14px; border-radius: 4px; border: 1px solid #0066cc;
+            background: #0066cc; color: #fff; text-decoration: none; font-size: 13px; cursor: pointer;
+        }
+        .btn.secondary, .download-btn.secondary { background: #fff; color: #0066cc; }
+        .btn:hover, .download-btn:hover { filter: brightness(.95); }
+        .assign-form { margin-top: 18px; padding-top: 16px; border-top: 1px solid #e5e5e5; }
+        .assign-form label { display: block; font-size: 12px; font-weight: 700; color: #52606d; margin-bottom: 6px; }
+        .assign-form .row { display: flex; flex-wrap: wrap; gap: 8px; }
+        .assign-form input[type="email"], .assign-form input[type="text"], .assign-form input[type="tel"] {
+            flex: 1 1 190px; min-width: 0; padding: 8px; border: 1px solid #cbd2d9; border-radius: 4px; font-size: 13px;
+        }
+        .assign-form .hint { display: block; margin-top: 6px; font-size: 11px; color: #7b8794; }
+        .notice { margin: 10px 0 0; padding: 8px; border-radius: 4px; font-size: 13px; background: #ffcdd2; color: #c62828; border: 1px solid #ef9a9a; }
+        .read-only-note { text-align: center; font-size: 12px; color: #7b8794; margin: -6px 0 10px; }
+        {% include "_sheet_styles.html" %}
+        @media print {
+            body { background: #fff; padding: 0; }
+            .no-print { display: none !important; }
+            .sheet-info, .grid-display { border-color: #000; box-shadow: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="toolbar no-print">
+            <div>
+                {% if is_admin %}
+                <a href="/admin">← Admin console</a>
+                {% else %}
+                <a href="/dashboard">← My dashboard</a>
+                {% endif %}
+            </div>
+            {% if user %}
+            <div class="who">{{ user.email }} · <a href="/auth/logout">Sign out</a></div>
+            {% endif %}
+        </div>
+
+        <h1>Bingo Sheet {{ sheet.sheet_id }}</h1>
+
+        <div class="sheet-info">
+            <h2>{{ sheet.student_name }}</h2>
+            <dl class="meta">
+                <div><dt>Sheet ID</dt><dd>{{ sheet.sheet_id }}</dd></div>
+                <div><dt>Student</dt><dd>{{ sheet.student_name }}</dd></div>
+                <div><dt>Parent</dt><dd>{{ sheet.parent_name }}</dd></div>
+                <div><dt>Parent email</dt><dd>{{ sheet.parent_email }}</dd></div>
+                <div><dt>Parent WhatsApp</dt><dd>{{ sheet.parent_whatsapp }}</dd></div>
+                <div><dt>Assigned account</dt><dd>{{ sheet.assigned_email or 'Unassigned (admin only)' }}</dd></div>
+                <div><dt>MC question ID</dt><dd>{{ sheet.multiple_choice_question_id }}</dd></div>
+                <div><dt>Progress</dt><dd>{{ marked|length }} of 25 squares marked</dd></div>
+            </dl>
+
+            <div class="actions no-print">
+                <a class="download-btn" href="/sheet/{{ sheet.sheet_id }}/download">⬇ Download printable .docx</a>
+                {% if is_admin %}
+                <button type="button" class="btn secondary" onclick="window.print()">🖨 Print this page</button>
+                {% endif %}
+            </div>
+
+            {% if is_admin %}
+            <form class="assign-form no-print" method="post" action="/admin/sheet/{{ sheet.sheet_id }}/assign">
+                <label for="assigned_email">Assigned Gmail account</label>
+                <div class="row">
+                    <input type="email" id="assigned_email" name="assigned_email"
+                           value="{{ sheet.assigned_email or '' }}" placeholder="student@gmail.com">
+                    <button type="submit" class="btn">Save assignment</button>
+                </div>
+                <span class="hint">Leave blank to make this sheet admin-only. The account is granted access on its next sign-in.</span>
+                {% if assign_error %}<div class="notice">{{ assign_error }}</div>{% endif %}
+            </form>
+            {% endif %}
+
+            <form class="assign-form no-print" method="post" action="/sheet/{{ sheet.sheet_id }}/details">
+                <label>Student and parent details</label>
+                <div class="row">
+                    <input type="text" name="student_name" value="{{ sheet.student_name }}" placeholder="Student name" aria-label="Student name" required>
+                    <input type="text" name="parent_name" value="{{ sheet.parent_name }}" placeholder="Parent name" aria-label="Parent name">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <input type="email" name="parent_email" value="{{ sheet.parent_email }}" placeholder="Parent email" aria-label="Parent email">
+                    <input type="tel" name="parent_whatsapp" value="{{ sheet.parent_whatsapp }}" placeholder="Parent WhatsApp" aria-label="Parent WhatsApp">
+                </div>
+                <div class="row" style="margin-top:8px;">
+                    <button type="submit" class="btn">Save details</button>
+                </div>
+                <span class="hint">Any field except the student name may be left blank.</span>
+            </form>
+        </div>
+
+        <p class="read-only-note">{% if is_admin %}Admin preview · {% endif %}Print or download this sheet from the buttons above.</p>
+
+        {% include "_board.html" %}
+
+        {% set reveal_answer = is_admin %}
+        {% include "_mcq.html" %}
+    </div>
+</body>
+</html>

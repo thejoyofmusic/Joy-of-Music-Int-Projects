@@ -10,7 +10,7 @@ import os
 import random
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, BinaryIO
 
 from docx import Document
 
@@ -263,10 +263,14 @@ def build_bingo_docx(
     clues: list[str],
     clue_order: list[int],
     mcq: dict[str, Any],
-    output_path: str,
+    output_path: str | BinaryIO,
     template_path: str,
-) -> str:
-    """Fill template with dynamic sheet number, clues, and MCQ."""
+) -> str | BinaryIO:
+    """Fill template with dynamic sheet number, clues, and MCQ.
+
+    ``output_path`` may be a filesystem path or a writable binary stream (the web
+    backend streams the document without touching disk).
+    """
     clue_map = {
         GRID_LABELS[i]: clues[clue_order[i]] for i in range(len(GRID_LABELS))
     }
@@ -277,7 +281,8 @@ def build_bingo_docx(
     _update_i_heard_table(doc, clue_map)
     _update_mcq_cell(_find_table(doc, 1, 1).rows[0].cells[0], mcq)
 
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    if isinstance(output_path, (str, os.PathLike)):
+        os.makedirs(os.path.dirname(os.fspath(output_path)) or ".", exist_ok=True)
     doc.save(output_path)
     return output_path
 

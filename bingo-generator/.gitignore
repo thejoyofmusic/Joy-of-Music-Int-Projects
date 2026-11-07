@@ -4,3 +4,14 @@ __pycache__/
 *.pyc
 .DS_Store
 logo.png
+.env
+.env.*
+!.env.example
+
+# Local database backups
+local-backups/
+
+# Local SQLite data (contains student email addresses)
+bingo_sheets.db
+bingo_sheets.db-wal
+bingo_sheets.db-shm

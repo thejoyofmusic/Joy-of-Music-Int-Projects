@@ -1,0 +1,30 @@
+{# 5x5 board, A1..E5 with C3 as the free space. Expects: sheet, clues_by_position, marked. #}
+{% set can_click = interactive|default(false) %}
+<div class="grid-display" data-sheet-id="{{ sheet.sheet_id }}">
+    <div class="grid-wrapper">
+        <div class="cell corner"></div>
+        {% for col in ['1', '2', '3', '4', '5'] %}
+        <div class="cell header">{{ col }}</div>
+        {% endfor %}
+
+        {% for row in ['A', 'B', 'C', 'D', 'E'] %}
+        <div class="cell label">{{ row }}</div>
+        {% for col in ['1', '2', '3', '4', '5'] %}
+        {% set pos = row ~ col %}
+        {% if pos == 'C3' %}
+        <div class="cell free-space{% if 'C3' in marked %} unlocked{% endif %}"
+             id="{{ sheet.sheet_id }}-C3" data-position="C3">{% if 'C3' in marked %}FREE ✓{% else %}FREE{% endif %}</div>
+        {% else %}
+        <div class="cell clue{% if pos in marked %} marked{% endif %}{% if can_click %} interactive{% endif %}"
+             id="{{ sheet.sheet_id }}-{{ pos }}"
+             data-position="{{ pos }}"
+             title="{{ clues_by_position.get(pos, '') }}"
+             {% if can_click %}role="button" tabindex="0" aria-pressed="{{ 'true' if pos in marked else 'false' }}"{% endif %}>
+            <span class="coord-badge">{{ pos }}</span>
+            <span class="clue-text">{{ clues_by_position.get(pos, '') }}</span>
+        </div>
+        {% endif %}
+        {% endfor %}
+        {% endfor %}
+    </div>
+</div>

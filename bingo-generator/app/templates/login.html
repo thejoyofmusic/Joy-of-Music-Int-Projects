@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign in · Carnatic Bingo</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #102a43 0%, #243b53 55%, #334e68 100%);
+            color: #102a43;
+            padding: 24px;
+        }
+        .card {
+            width: 100%;
+            max-width: 420px;
+            background: #fff;
+            border-radius: 14px;
+            padding: 34px 30px;
+            box-shadow: 0 18px 45px rgba(0, 0, 0, .28);
+            text-align: center;
+        }
+        .mark {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 54px;
+            height: 54px;
+            border-radius: 14px;
+            background: #e3f2fd;
+            font-size: 26px;
+            margin-bottom: 14px;
+        }
+        h1 { font-size: 22px; margin: 0 0 6px; }
+        .subtitle { margin: 0 0 26px; color: #52606d; font-size: 14px; line-height: 1.5; }
+        .google-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            padding: 11px 16px;
+            border: 1px solid #cbd2d9;
+            border-radius: 8px;
+            background: #fff;
+            color: #243b53;
+            font-size: 15px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: background .15s ease, box-shadow .15s ease;
+        }
+        .google-btn:hover { background: #f5f7fa; box-shadow: 0 2px 10px rgba(16, 42, 67, .12); }
+        .google-btn svg { width: 18px; height: 18px; flex: none; }
+        .hint { margin: 22px 0 0; font-size: 12px; color: #7b8794; line-height: 1.6; }
+        .setup {
+            margin-top: 20px;
+            padding: 14px;
+            border: 1px solid #f0b429;
+            border-radius: 8px;
+            background: #fffbea;
+            color: #8d2b0b;
+            font-size: 12px;
+            text-align: left;
+            line-height: 1.6;
+        }
+        .setup code { background: #fff; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+        .local { margin-top: 22px; padding-top: 20px; border-top: 1px solid #e4e9ef; text-align: left; }
+        .local h2 { margin: 0 0 4px; font-size: 13px; color: #243b53; }
+        .local p { margin: 0 0 10px; font-size: 11.5px; color: #7b8794; line-height: 1.55; }
+        .local input {
+            width: 100%;
+            padding: 9px 11px;
+            border: 1px solid #cbd2d9;
+            border-radius: 7px;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        .local button {
+            width: 100%;
+            padding: 9px 16px;
+            border: 1px solid #243b53;
+            border-radius: 7px;
+            background: #243b53;
+            color: #fff;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .local button:hover { background: #102a43; }
+        .error {
+            margin: 0 0 14px;
+            padding: 9px 12px;
+            border: 1px solid #f3b5ab;
+            border-radius: 7px;
+            background: #fdf3f2;
+            color: #b42318;
+            font-size: 12px;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="mark">🎵</div>
+        <h1>Carnatic Bingo</h1>
+        <p class="subtitle">Sign in with the Google account your bingo sheet was assigned to.</p>
+
+        {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+        {% if configured %}
+        <a class="google-btn" href="/auth/login">
+            <svg viewBox="0 0 48 48" aria-hidden="true">
+                <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.5l6.7-6.7C35.6 2.4 30.2 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.8 6.1C12.3 13.2 17.6 9.5 24 9.5z"/>
+                <path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-2.8-.4-4.1H24v8.4h12.5c-.3 2.1-1.6 5.2-4.6 7.3l7.5 5.8c4.4-4.1 6.7-10.1 6.7-17.4z"/>
+                <path fill="#FBBC05" d="M10.4 28.7c-.5-1.5-.8-3-.8-4.7s.3-3.2.8-4.7l-7.8-6.1C.9 16.5 0 20.1 0 24s.9 7.5 2.6 10.8l7.8-6.1z"/>
+                <path fill="#34A853" d="M24 48c6.2 0 11.5-2 15.4-5.6l-7.5-5.8c-2 1.4-4.7 2.4-7.9 2.4-6.4 0-11.7-3.7-13.6-9.3l-7.8 6.1C6.5 42.6 14.6 48 24 48z"/>
+            </svg>
+            Continue with Google
+        </a>
+        <p class="hint">
+            Only accounts an administrator has assigned a sheet to can continue.
+            Need access? Ask your administrator to add your Gmail address.
+        </p>
+        {% else %}
+        <div class="setup">
+            <strong>Google sign-in is not configured.</strong><br>
+            {% if local_login %}
+            Add the Client ID and Client secret from your Google Cloud project to
+            switch it on — the app writes them to <code>.env</code> for you.
+            {% else %}
+            Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> to
+            <code>bingo-generator/.env</code>, set the authorised redirect URI to
+            <code>/auth/callback</code>, then restart the server.
+            {% endif %}
+        </div>
+        {% if local_login %}
+        <a class="google-btn" href="/setup" style="margin-top:12px">Set up Google sign-in</a>
+        {% endif %}
+        {% endif %}
+
+        {% if local_login %}
+        <div class="local">
+            <h2>Or sign in on this computer</h2>
+            <p>
+                Skip Google while you set it up. Only works locally; the first
+                account becomes the administrator.
+            </p>
+            <form method="post" action="/auth/local-login">
+                <input type="email" name="email" placeholder="you@example.com"
+                       autocomplete="email" required>
+                <button type="submit">Continue without Google</button>
+            </form>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
