@@ -170,6 +170,25 @@ MIGRATIONS: tuple[Migration, ...] = (
             """,
         ),
     ),
+    Migration(
+        version=8,
+        name="persist_c3_solution",
+        statements=(
+            "ALTER TABLE bingo_sheet ADD COLUMN mcq_solved BOOLEAN NOT NULL DEFAULT FALSE",
+            r"""
+            UPDATE bingo_sheet SET mcq_solved = TRUE
+             WHERE lower(replace(CAST(marked_cells AS VARCHAR), ' ', '')) LIKE '%"c3"%'
+                OR lower(replace(CAST(marked_cells AS VARCHAR), ' ', '')) LIKE '%\"c3\"%'
+            """,
+        ),
+    ),
+    Migration(
+        version=9,
+        name="distinct_mcq_wrong_choices",
+        statements=(
+            "ALTER TABLE bingo_sheet ADD COLUMN mcq_wrong_choices INTEGER NOT NULL DEFAULT 0",
+        ),
+    ),
 )
 
 

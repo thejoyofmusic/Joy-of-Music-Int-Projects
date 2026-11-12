@@ -843,7 +843,9 @@ def assign_sheet(sheet: BingoSheet, email: Optional[str]) -> None:
     if normalize_email(sheet.assigned_email) != normalize_email(email):
         sheet.marked_cells = [position for position in sheet.marked if position != MCQ_POSITION]
         sheet.mcq_incorrect_attempts = 0
+        sheet.mcq_wrong_choices = 0
         sheet.mcq_attempts = 0
+        sheet.mcq_solved = False
         sheet.last_activity_at = None
     sheet.assigned_email = email
 
@@ -1145,20 +1147,15 @@ async def dashboard_sheet_state(
     except Exception:
         return JSONResponse({"error": "Invalid request body"}, status_code=400)
 
-    marked = list(sheet.marked)
+    marked = [position for position in sheet.marked if position != MCQ_POSITION]
     if "cells" in payload:
         raw_cells = payload["cells"]
         if not isinstance(raw_cells, (list, tuple)):
             return JSONResponse(
                 {"error": "cells must be a list of board positions"}, status_code=400
             )
-        # C3 is earned through the MCQ, so a bulk replace cannot add it.
-        already_unlocked = MCQ_POSITION in sheet.marked
-        marked = [
-            position
-            for position in normalize_marked_cells(raw_cells)
-            if position != MCQ_POSITION or already_unlocked
-        ]
+        marked = [position for position in normalize_marked_cells(raw_cells)
+                  if position != MCQ_POSITION]
     else:
         position = str(payload.get("cell") or "").strip().upper()
         if position == MCQ_POSITION:
@@ -1196,6 +1193,9 @@ async def dashboard_verify(
     if failure:
         return failure
 
+    if sheet.mcq_solved:
+        return JSONResponse({"correct": True, "marked": sheet.marked, "already_solved": True})
+
     mc_question = db.get(
         MultipleChoiceQuestionList, sheet.multiple_choice_question_id
     )
@@ -1224,12 +1224,26 @@ async def dashboard_verify(
         BingoSheet.mcq_attempts: BingoSheet.mcq_attempts + 1,
         BingoSheet.last_activity_at: datetime.now(timezone.utc).replace(tzinfo=None),
     }
+    unsolved_sheet = db.query(BingoSheet).filter_by(id=sheet.id, mcq_solved=False)
     if correct:
-        sheet.marked_cells = normalize_marked_cells(list(sheet.marked) + [MCQ_POSITION])
+        counters[BingoSheet.mcq_solved] = True
     else:
+        selected = selected_option_index(selected_raw, list(mc_question.options))
+        if selected is None or selected >= len(OPTION_LETTERS):
+            return JSONResponse({"correct": False, "error": "Invalid answer choice."}, status_code=400)
+        choice_bit = 1 << selected
+        unsolved_sheet = unsolved_sheet.filter(
+            BingoSheet.mcq_wrong_choices.bitwise_and(choice_bit) == 0
+        )
+        counters[BingoSheet.mcq_wrong_choices] = BingoSheet.mcq_wrong_choices.bitwise_or(choice_bit)
         counters[BingoSheet.mcq_incorrect_attempts] = BingoSheet.mcq_incorrect_attempts + 1
-    db.query(BingoSheet).filter_by(id=sheet.id).update(counters)
+
+    updated = unsolved_sheet.update(counters)
     db.commit()
+    if not updated:
+        if sheet.mcq_solved:
+            return JSONResponse({"correct": True, "marked": sheet.marked, "already_solved": True})
+        return JSONResponse({"correct": False, "marked": sheet.marked, "already_attempted": True})
     return JSONResponse({"correct": correct, "marked": sheet.marked})
 
 

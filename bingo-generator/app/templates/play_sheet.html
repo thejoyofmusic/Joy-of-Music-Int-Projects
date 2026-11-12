@@ -147,7 +147,7 @@
             document.querySelectorAll('.mc-question .submit-btn[data-action="verify"]').forEach(function (button) {
                 button.addEventListener('click', function () {
                     var panel = button.closest('.mc-question');
-                    if (!panel) { return; }
+                    if (!panel || button.disabled) { return; }
                     var boardId = panel.dataset.sheetId;
                     var checked = panel.querySelector('input[type="radio"]:checked');
                     if (!checked) {
@@ -155,6 +155,11 @@
                         return;
                     }
                     var selected = parseInt(checked.value, 10);
+
+                    var radios = panel.querySelectorAll('input[type="radio"]');
+                    var solved = false;
+                    button.disabled = true;
+                    radios.forEach(function (radio) { radio.disabled = true; });
 
                     postJSON('/dashboard/sheet/' + encodeURIComponent(boardId) + '/verify', { selectedAnswer: selected })
                         .then(function (result) {
@@ -167,8 +172,12 @@
                                 showMessage(panel, 'error', data.error || 'Could not verify that answer.');
                                 return;
                             }
-                            markOptions(panel, selected, data.correct);
+                            if (!data.already_solved) {
+                                markOptions(panel, selected, data.correct);
+                            }
                             if (data.correct) {
+                                solved = true;
+                                button.textContent = 'Answer saved';
                                 var free = document.getElementById(boardId + '-C3');
                                 if (free) {
                                     free.classList.add('unlocked');
@@ -177,11 +186,19 @@
                                 updateProgress(boardId, data.marked);
                                 showMessage(panel, 'success', 'Correct! Free space C3 unlocked.');
                             } else {
-                                showMessage(panel, 'error', 'Incorrect. Try again.');
+                                showMessage(panel, 'error', data.already_attempted
+                                    ? 'You already tried that choice. Try a different one.'
+                                    : 'Incorrect. Try again.');
                             }
                         })
                         .catch(function () {
                             showMessage(panel, 'error', 'Could not reach the server. Check your connection.');
+                        })
+                        .finally(function () {
+                            if (!solved) {
+                                button.disabled = false;
+                                radios.forEach(function (radio) { radio.disabled = false; });
+                            }
                         });
                 });
             });

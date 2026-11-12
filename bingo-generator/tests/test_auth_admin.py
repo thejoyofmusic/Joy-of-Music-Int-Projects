@@ -744,6 +744,30 @@ def test_dashboard_tile_state_persists(client):
     assert page.text.count("cell clue marked") == 2
 
 
+def test_repeated_wrong_choice_counts_once_after_refresh(client):
+    email = unique_email("wrong-choice")
+    sheet = make_sheet(client, assigned_email=email)
+    login_as(client, email)
+    with SessionLocal() as db:
+        mcq = db.get(MultipleChoiceQuestionList, sheet.multiple_choice_question_id)
+        wrong = [letter for letter in "ABCD" if letter != mcq.answer_key]
+
+    url = f"/dashboard/sheet/{sheet.sheet_id}/verify"
+    assert client.post(url, json={"selectedAnswer": wrong[0]}).json()["correct"] is False
+    assert client.get(f"/dashboard/sheet/{sheet.sheet_id}").status_code == 200
+
+    repeat = client.post(url, json={"selectedAnswer": "ABCD".index(wrong[0])})
+    assert repeat.json() == {"correct": False, "marked": [], "already_attempted": True}
+    with SessionLocal() as db:
+        stored = db.get(BingoSheet, sheet.id)
+        assert stored.mcq_attempts == stored.mcq_incorrect_attempts == 1
+
+    assert client.post(url, json={"selectedAnswer": wrong[1]}).json()["correct"] is False
+    with SessionLocal() as db:
+        stored = db.get(BingoSheet, sheet.id)
+        assert stored.mcq_attempts == stored.mcq_incorrect_attempts == 2
+
+
 def test_dashboard_mcq_unlocks_the_free_space(client):
     student = unique_email("mcq")
     sheet = make_sheet(client, assigned_email=student, student="MCQ Student")
@@ -776,7 +800,23 @@ def test_dashboard_mcq_unlocks_the_free_space(client):
         stored = db.query(BingoSheet).filter(BingoSheet.sheet_id == sheet.sheet_id).one()
         assert "C3" in stored.marked
 
-    assert "FREE ✓" in client.get(f"/dashboard/sheet/{sheet.sheet_id}").text
+    page = client.get(f"/dashboard/sheet/{sheet.sheet_id}")
+    assert "FREE ✓" in page.text
+    assert "Correct! Free space C3 unlocked." in page.text
+    assert 'data-action="verify"' not in page.text.split("<script>", 1)[0]
+
+    state = client.post(f"/dashboard/sheet/{sheet.sheet_id}/state", json={"cells": ["A1"]})
+    assert state.json()["marked"] == ["A1", "C3"]
+    duplicate = client.post(
+        f"/dashboard/sheet/{sheet.sheet_id}/verify", json={"selectedAnswer": wrong}
+    )
+    assert duplicate.json() == {"correct": True, "marked": ["A1", "C3"], "already_solved": True}
+    with SessionLocal() as db:
+        stored = db.get(BingoSheet, sheet.id)
+        assert stored.mcq_solved
+        assert stored.mcq_attempts == 2
+        assert stored.mcq_incorrect_attempts == 1
+
 
     login_as(client, ADMIN_EMAIL)
     page = client.get(f"/admin?q={sheet.sheet_id}")

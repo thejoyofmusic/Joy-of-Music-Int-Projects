@@ -197,10 +197,13 @@ class BingoSheet(Base):
     # Gmail account allowed to play this sheet; NULL means admin-only.
     assigned_email = Column(String, index=True, nullable=True)
 
-    # Board positions the player has marked, e.g. ["A1", "C3"].
+    # Tile marks and the C3 solution are saved independently.
     marked_cells = Column(JSON, nullable=False, default=list)
     last_activity_at = Column(DateTime, nullable=True)
+    mcq_solved = Column(Boolean, nullable=False, default=False, server_default=false())
     mcq_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    # Bit 0 represents choice A, bit 1 choice B, and so on.
+    mcq_wrong_choices = Column(Integer, nullable=False, default=0, server_default="0")
     mcq_incorrect_attempts = Column(Integer, nullable=False, default=0, server_default="0")
 
     # Exactly 24 integer ids into bingo_question_list, ordered A1..E5 skipping C3.
@@ -222,7 +225,11 @@ class BingoSheet(Base):
     @property
     def marked(self) -> List[str]:
         """Saved board progress, tolerant of legacy/empty values."""
-        return normalize_marked_cells(self.marked_cells)
+        marked = [position for position in normalize_marked_cells(self.marked_cells)
+                  if position != MCQ_POSITION]
+        if self.mcq_solved:
+            marked.append(MCQ_POSITION)
+        return marked
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<BingoSheet id={self.id} sheet_id={self.sheet_id!r} student_name={self.student_name!r}>"
