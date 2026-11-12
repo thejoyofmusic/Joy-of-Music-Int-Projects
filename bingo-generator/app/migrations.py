@@ -148,6 +148,28 @@ MIGRATIONS: tuple[Migration, ...] = (
             ),
         ),
     ),
+    Migration(
+        version=6,
+        name="student_sheet_activity",
+        statements=("ALTER TABLE bingo_sheet ADD COLUMN last_activity_at TIMESTAMP",),
+    ),
+    Migration(
+        version=7,
+        name="registered_student_access",
+        statements=(
+            "ALTER TABLE app_user ADD COLUMN registered_student BOOLEAN NOT NULL DEFAULT FALSE",
+            """
+            UPDATE app_user SET registered_student = TRUE
+            WHERE role = 'user' AND (
+                student_name <> '' OR parent_name <> '' OR parent_email <> ''
+                OR parent_whatsapp <> '' OR EXISTS (
+                    SELECT 1 FROM bingo_sheet
+                    WHERE lower(assigned_email) = app_user.email
+                )
+            )
+            """,
+        ),
+    ),
 )
 
 

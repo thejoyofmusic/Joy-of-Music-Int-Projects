@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ sheet.sheet_id }} · Carnatic Bingo</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; color: #333; }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { font-size: 22px; margin: 0 0 6px; }
+        .intro { margin: 0 0 22px; color: #52606d; font-size: 13px; line-height: 1.6; }
+        .board-card {
+            background: #fff; border: 1px solid #ddd; border-radius: 10px;
+            padding: 18px; margin-bottom: 26px;
+        }
+        .board-head {
+            display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+            gap: 8px; margin-bottom: 6px;
+        }
+        .board-head h2 { margin: 0; font-size: 17px; }
+        .board-head .sid { font-size: 12px; color: #7b8794; font-variant-numeric: tabular-nums; }
+        .board-sub { margin: 0 0 6px; font-size: 12px; color: #52606d; }
+        .progress { font-size: 12px; color: #2e7d32; font-weight: 600; }
+        .board-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 0; }
+        .board-actions a {
+            font-size: 12px; color: #0066cc; text-decoration: underline;
+        }
+        {% include "_student_nav_styles.html" %}
+        {% include "_sheet_styles.html" %}
+    </style>
+</head>
+<body>
+    <div class="container">
+        {% include "_student_nav.html" %}
+        <h1>Bingo sheet {{ sheet.sheet_id }}</h1>
+        <p class="intro">
+            Tap a square when you hear its clue. Answer the multiple-choice question to unlock C3.
+        </p>
+
+        <section class="board-card">
+            <div class="board-head">
+                <h2>{{ sheet.student_name }}</h2>
+                <span class="sid">{{ sheet.sheet_id }}</span>
+            </div>
+            <p class="board-sub">
+                {% if sheet.parent_name %}Parent: {{ sheet.parent_name }} · {% endif %}<span class="progress" id="{{ sheet.sheet_id }}-progress">{{ marked|length }} of 25 squares marked</span>
+            </p>
+
+            {% set interactive = true %}
+            {% include "_board.html" %}
+            {% include "_mcq.html" %}
+
+            <div class="board-actions">
+                <a href="/sheet/{{ sheet.sheet_id }}">Open printable view</a>
+                <a href="/sheet/{{ sheet.sheet_id }}/download">Download .docx</a>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        (function () {
+            function postJSON(url, body) {
+                return fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                    credentials: 'same-origin'
+                }).then(function (response) {
+                    return response.json().then(function (data) {
+                        return { status: response.status, data: data || {} };
+                    }).catch(function () {
+                        return { status: response.status, data: {} };
+                    });
+                });
+            }
+
+            function updateProgress(boardId, marked) {
+                var progress = document.getElementById(boardId + '-progress');
+                if (progress && marked) {
+                    progress.textContent = marked.length + ' of 25 squares marked';
+                }
+            }
+
+            function showMessage(panel, kind, text) {
+                var boardId = panel.dataset.sheetId;
+                var success = document.getElementById(boardId + '-success');
+                var error = document.getElementById(boardId + '-error');
+                if (success) { success.style.display = 'none'; }
+                if (error) { error.style.display = 'none'; }
+                var target = kind === 'success' ? success : error;
+                if (target) {
+                    target.textContent = text;
+                    target.style.display = 'block';
+                }
+            }
+
+            function markOptions(panel, selected, correct) {
+                panel.querySelectorAll('input[type="radio"]').forEach(function (radio) {
+                    var label = radio.closest('.option-btn');
+                    if (!label) { return; }
+                    label.classList.remove('correct', 'incorrect');
+                    var value = parseInt(radio.value, 10);
+                    if (value === selected) {
+                        label.classList.add(correct ? 'correct' : 'incorrect');
+                    }
+                });
+            }
+
+            document.querySelectorAll('.cell.clue.interactive').forEach(function (cell) {
+                function toggle() {
+                    var grid = cell.closest('.grid-display');
+                    if (!grid) { return; }
+                    var boardId = grid.dataset.sheetId;
+                    var position = cell.dataset.position;
+
+                    postJSON('/dashboard/sheet/' + encodeURIComponent(boardId) + '/state', { cell: position })
+                        .then(function (result) {
+                            if (result.status === 401) {
+                                window.location.href = '/auth/login';
+                                return;
+                            }
+                            if (result.status !== 200) {
+                                window.alert(result.data.error || 'Could not save that square.');
+                                return;
+                            }
+                            var marked = result.data.marked || [];
+                            var on = marked.indexOf(position) !== -1;
+                            cell.classList.toggle('marked', on);
+                            cell.setAttribute('aria-pressed', on ? 'true' : 'false');
+                            updateProgress(boardId, marked);
+                        })
+                        .catch(function () {
+                            window.alert('Could not reach the server. Check your connection.');
+                        });
+                }
+
+                cell.addEventListener('click', toggle);
+                cell.addEventListener('keydown', function (event) {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        toggle();
+                    }
+                });
+            });
+
+            document.querySelectorAll('.mc-question .submit-btn[data-action="verify"]').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    var panel = button.closest('.mc-question');
+                    if (!panel) { return; }
+                    var boardId = panel.dataset.sheetId;
+                    var checked = panel.querySelector('input[type="radio"]:checked');
+                    if (!checked) {
+                        showMessage(panel, 'error', 'Please select an option first.');
+                        return;
+                    }
+                    var selected = parseInt(checked.value, 10);
+
+                    postJSON('/dashboard/sheet/' + encodeURIComponent(boardId) + '/verify', { selectedAnswer: selected })
+                        .then(function (result) {
+                            if (result.status === 401) {
+                                window.location.href = '/auth/login';
+                                return;
+                            }
+                            var data = result.data || {};
+                            if (result.status !== 200 || data.error) {
+                                showMessage(panel, 'error', data.error || 'Could not verify that answer.');
+                                return;
+                            }
+                            markOptions(panel, selected, data.correct);
+                            if (data.correct) {
+                                var free = document.getElementById(boardId + '-C3');
+                                if (free) {
+                                    free.classList.add('unlocked');
+                                    free.textContent = 'FREE ✓';
+                                }
+                                updateProgress(boardId, data.marked);
+                                showMessage(panel, 'success', 'Correct! Free space C3 unlocked.');
+                            } else {
+                                showMessage(panel, 'error', 'Incorrect. Try again.');
+                            }
+                        })
+                        .catch(function () {
+                            showMessage(panel, 'error', 'Could not reach the server. Check your connection.');
+                        });
+                });
+            });
+        })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+<header class="student-header">
+    <span class="student-brand">Carnatic Bingo</span>
+    <a href="/auth/logout">Sign out</a>
+</header>
+<nav class="student-nav" aria-label="Student navigation">
+    <a href="/dashboard"{% if active_tab == 'dashboard' %} aria-current="page"{% endif %}>Dashboard</a>
+    <a href="/dashboard/assignments"{% if active_tab == 'assignments' %} aria-current="{{ 'location' if sheet is defined else 'page' }}"{% endif %}>Assignments</a>
+</nav>

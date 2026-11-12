@@ -324,7 +324,9 @@ def test_valid_user_sign_in_lands_on_dashboard(client, monkeypatch):
     assert dashboard.status_code == 200
     assert sheet.sheet_id in dashboard.text
     assert "Dashboard Student" in dashboard.text
-    assert dashboard.text.count('class="cell clue') == GRID_CELL_COUNT
+    assert 'class="cell clue' not in dashboard.text
+    play = client.get(f"/dashboard/sheet/{sheet.sheet_id}")
+    assert play.text.count('class="cell clue') == GRID_CELL_COUNT
 
     with SessionLocal() as db:
         user = db.query(User).filter(User.email == student).one()
@@ -642,6 +644,23 @@ def test_non_admin_cannot_reach_admin_pages_or_data(client):
 # ---------------------------------------------------------------------------
 # User dashboard
 # ---------------------------------------------------------------------------
+def test_registered_student_can_sign_in_before_first_assignment(client, monkeypatch):
+    email = unique_email("waiting")
+    login_as(client, ADMIN_EMAIL)
+    assert client.post(
+        "/admin/students", data={"email": email}, follow_redirects=False
+    ).status_code == 303
+    client.cookies.clear()
+
+    sign_in = sign_in_via_callback(client, monkeypatch, email)
+    assert sign_in.headers["location"] == "/dashboard"
+    assert client.get("/", follow_redirects=False).headers["location"] == "/dashboard"
+    for path in ("/dashboard", "/dashboard/assignments"):
+        page = client.get(path)
+        assert page.status_code == 200
+        assert "No bingo sheets assigned yet." in page.text
+
+
 def test_dashboard_is_scoped_to_the_signed_in_user(client):
     owner = unique_email("owner")
     other = unique_email("other")
@@ -657,11 +676,40 @@ def test_dashboard_is_scoped_to_the_signed_in_user(client):
 
     assert client.get(f"/sheet/{mine.sheet_id}").status_code == 200
     assert client.get(f"/sheet/{theirs.sheet_id}").status_code == 403
+    assert client.get(f"/dashboard/sheet/{theirs.sheet_id}").status_code == 403
+    assignments = client.get("/dashboard/assignments")
+    assert mine.sheet_id in assignments.text
+    assert theirs.sheet_id not in assignments.text
 
     blocked = client.post(
         f"/dashboard/sheet/{theirs.sheet_id}/state", json={"cell": "A1"}
     )
     assert blocked.status_code == 403
+
+
+def test_dashboard_lists_recent_work_separately_from_assignments(client):
+    owner = unique_email("recent")
+    first = make_sheet(client, assigned_email=owner)
+    second = make_sheet(client, assigned_email=owner)
+    newest = make_sheet(client, assigned_email=owner)
+    login_as(client, owner)
+
+    for sheet in (second, first):
+        assert client.post(
+            f"/dashboard/sheet/{sheet.sheet_id}/state", json={"cell": "A1"}
+        ).status_code == 200
+
+    dashboard = client.get("/dashboard").text
+    assert "Recent work" in dashboard
+    assert dashboard.index(first.sheet_id) < dashboard.index(second.sheet_id)
+    assert newest.sheet_id not in dashboard
+
+    assignments = client.get("/dashboard/assignments").text
+    assert all(sheet.sheet_id in assignments for sheet in (first, second, newest))
+    assert 'class="cell clue' not in assignments
+    play = client.get(f"/dashboard/sheet/{first.sheet_id}").text
+    assert "cell clue marked" in play
+    assert second.sheet_id not in play
 
 
 def test_dashboard_tile_state_persists(client):
@@ -692,7 +740,7 @@ def test_dashboard_tile_state_persists(client):
         stored = db.query(BingoSheet).filter(BingoSheet.sheet_id == sheet.sheet_id).one()
         assert stored.marked == ["A1", "E5"]
 
-    page = client.get("/dashboard")
+    page = client.get(f"/dashboard/sheet/{sheet.sheet_id}")
     assert page.text.count("cell clue marked") == 2
 
 
@@ -728,7 +776,7 @@ def test_dashboard_mcq_unlocks_the_free_space(client):
         stored = db.query(BingoSheet).filter(BingoSheet.sheet_id == sheet.sheet_id).one()
         assert "C3" in stored.marked
 
-    assert "FREE ✓" in client.get("/dashboard").text
+    assert "FREE ✓" in client.get(f"/dashboard/sheet/{sheet.sheet_id}").text
 
     login_as(client, ADMIN_EMAIL)
     page = client.get(f"/admin?q={sheet.sheet_id}")

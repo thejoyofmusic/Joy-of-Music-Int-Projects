@@ -29,7 +29,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, false
 from sqlalchemy.orm import relationship, validates
 
 from app.database import Base
@@ -90,6 +90,7 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     email = Column(String, nullable=False, unique=True, index=True)
     role = Column(String, nullable=False, default=ROLE_USER)
+    registered_student = Column(Boolean, nullable=False, default=False, server_default=false())
     student_name = Column(String, nullable=False, default="", server_default="")
     parent_name = Column(String, nullable=False, default="", server_default="")
     parent_email = Column(String, nullable=False, default="", server_default="")
@@ -198,6 +199,7 @@ class BingoSheet(Base):
 
     # Board positions the player has marked, e.g. ["A1", "C3"].
     marked_cells = Column(JSON, nullable=False, default=list)
+    last_activity_at = Column(DateTime, nullable=True)
     mcq_attempts = Column(Integer, nullable=False, default=0, server_default="0")
     mcq_incorrect_attempts = Column(Integer, nullable=False, default=0, server_default="0")
 

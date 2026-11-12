@@ -16,6 +16,7 @@ import logging
 import random
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -409,10 +410,9 @@ def home(request: Request, db: Session = Depends(get_db)):
                 "local_login": auth.local_login_enabled() and auth.request_is_local(request),
             },
         )
-    if user.is_admin:
-        return RedirectResponse(url="/admin", status_code=303)
-    if auth.assigned_sheet_count(db, user.email) > 0:
-        return RedirectResponse(url="/dashboard", status_code=303)
+    destination = auth.landing_url(db, user)
+    if destination:
+        return RedirectResponse(url=destination, status_code=303)
     return error_page(request, UNAUTHORIZED_MESSAGE, 403, user=user)
 
 
@@ -844,6 +844,7 @@ def assign_sheet(sheet: BingoSheet, email: Optional[str]) -> None:
         sheet.marked_cells = [position for position in sheet.marked if position != MCQ_POSITION]
         sheet.mcq_incorrect_attempts = 0
         sheet.mcq_attempts = 0
+        sheet.last_activity_at = None
     sheet.assigned_email = email
 
 
@@ -956,6 +957,8 @@ async def admin_add_student(request: Request, db: Session = Depends(get_db)):
     if account is None:
         account = User(email=email, role=auth.role_for_email(email))
         db.add(account)
+    if not account.is_admin:
+        account.registered_student = True
     update_student_details(
         db, account, {field: value for field, value in details.model_dump().items() if value}
     )
@@ -983,6 +986,7 @@ async def admin_edit_student(student_id: int, request: Request, db: Session = De
     except ValidationError as exc:
         return error_page(request, validation_error_message(exc), 422, user=user)
 
+    account.registered_student = True
     update_student_details(db, account, details.model_dump(exclude_unset=True))
     db.commit()
     return RedirectResponse(url=f"/admin?updated={quote(account.email, safe='')}", status_code=303)
@@ -1058,8 +1062,9 @@ async def admin_remove_student(request: Request, db: Session = Depends(get_db)):
 # User dashboard
 # ---------------------------------------------------------------------------
 @app.get("/dashboard")
+@app.get("/dashboard/assignments")
 def dashboard(request: Request, db: Session = Depends(get_db)):
-    """The signed-in user's assigned boards, with saved progress."""
+    """Show recent work or list every assignment for the signed-in student."""
     user = auth.current_user(request, db)
     if user is None:
         return login_redirect(request)
@@ -1069,16 +1074,28 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     sheets = (
         db.query(BingoSheet)
         .filter(func.lower(BingoSheet.assigned_email) == user.email)
-        .order_by(BingoSheet.id)
+        .order_by(BingoSheet.id.desc())
         .all()
     )
-    if not sheets:
+    if not sheets and not user.registered_student:
         return error_page(request, UNAUTHORIZED_MESSAGE, 403, user=user)
 
+    assignments = request.url.path == "/dashboard/assignments"
+    recent = sorted(
+        (sheet for sheet in sheets if sheet.last_activity_at or sheet.marked or sheet.mcq_attempts),
+        key=lambda sheet: (sheet.last_activity_at or datetime.min, sheet.id),
+        reverse=True,
+    )[:3]
     return templates.TemplateResponse(
         request,
         "dashboard.html",
-        {"user": user, "boards": [sheet_view(db, sheet) for sheet in sheets]},
+        {
+            "user": user,
+            "student_name": user.student_name or (sheets[0].student_name if sheets else ""),
+            "active_tab": "assignments" if assignments else "dashboard",
+            "sheets": sheets if assignments else recent or sheets[:1],
+            "has_recent_work": bool(recent),
+        },
     )
 
 
@@ -1096,6 +1113,22 @@ def dashboard_sheet(
     if not auth.can_access_sheet(user, sheet):
         return user, None, JSONResponse({"error": "Access denied"}, status_code=403)
     return user, sheet, None
+
+
+@app.get("/dashboard/sheet/{identifier}")
+def play_sheet(identifier: str, request: Request, db: Session = Depends(get_db)):
+    user, sheet, failure = dashboard_sheet(request, db, identifier)
+    if user is None:
+        return login_redirect(request)
+    if failure is not None:
+        message = "Sheet not found." if failure.status_code == 404 else "This sheet is not assigned to you."
+        return error_page(request, message, failure.status_code, user=user)
+    if user.is_admin:
+        return RedirectResponse(url=f"/admin/sheet/{sheet.sheet_id}", status_code=303)
+
+    context = sheet_view(db, sheet)
+    context.update({"user": user, "active_tab": "assignments"})
+    return templates.TemplateResponse(request, "play_sheet.html", context)
 
 
 @app.post("/dashboard/sheet/{identifier}/state")
@@ -1143,6 +1176,7 @@ async def dashboard_sheet_state(
             marked.append(position)
 
     sheet.marked_cells = normalize_marked_cells(marked)
+    sheet.last_activity_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     return JSONResponse(
         {
@@ -1188,6 +1222,7 @@ async def dashboard_verify(
     correct = result["correct"]
     counters = {
         BingoSheet.mcq_attempts: BingoSheet.mcq_attempts + 1,
+        BingoSheet.last_activity_at: datetime.now(timezone.utc).replace(tzinfo=None),
     }
     if correct:
         sheet.marked_cells = normalize_marked_cells(list(sheet.marked) + [MCQ_POSITION])
