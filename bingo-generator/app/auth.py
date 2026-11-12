@@ -323,7 +323,7 @@ def landing_url(db: Session, user: User) -> Optional[str]:
     """Where a freshly signed-in account belongs, or None when unauthorized."""
     if user.is_admin:
         return "/admin"
-    if assigned_sheet_count(db, user.email) > 0:
+    if user.registered_student or assigned_sheet_count(db, user.email) > 0:
         return "/dashboard"
     return None
 

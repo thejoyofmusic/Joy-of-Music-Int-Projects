@@ -1,11 +1,12 @@
 {# C3 multiple-choice panel. Expects: sheet, mc_question. Flags: interactive, reveal_answer. #}
 <div class="mc-question" data-sheet-id="{{ sheet.sheet_id }}">
-    <p class="mc-title">★ Answer the MCQ to unlock the free space ★</p>
+    {% set solved = interactive|default(false) and sheet.mcq_solved %}
+    <p class="mc-title">{% if solved %}C3 question completed{% else %}★ Answer the MCQ to unlock the free space ★{% endif %}</p>
     {% if mc_question %}
     <p class="mc-text">{{ mc_question.question }}</p>
     {% for option in mc_question.options %}
     {% set letter = ['A', 'B', 'C', 'D'][loop.index0] %}
-    {% if interactive|default(false) %}
+    {% if interactive|default(false) and not solved %}
     <label class="option-btn">
         <input type="radio" name="mc_answer_{{ sheet.sheet_id }}" value="{{ loop.index0 }}">
         <span class="option-letter">{{ letter }}</span>
@@ -18,11 +19,11 @@
     </div>
     {% endif %}
     {% endfor %}
-    {% if interactive|default(false) %}
+    {% if interactive|default(false) and not solved %}
     <button type="button" class="submit-btn" data-action="verify">Submit Answer</button>
     {% endif %}
-    <div class="success-message" id="{{ sheet.sheet_id }}-success"></div>
-    <div class="error-message" id="{{ sheet.sheet_id }}-error"></div>
+    <div class="success-message" id="{{ sheet.sheet_id }}-success" role="status"{% if solved %} style="display:block"{% endif %}>{% if solved %}Correct! Free space C3 unlocked.{% endif %}</div>
+    <div class="error-message" id="{{ sheet.sheet_id }}-error" role="alert"></div>
     {% if not interactive|default(false) and reveal_answer|default(false) %}
     <p class="mc-key">Answer key: {{ mc_question.answer_key|upper }}</p>
     {% endif %}

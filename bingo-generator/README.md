@@ -83,12 +83,14 @@ local sign-in form.
 
 After sign-in:
 
-- **Admin** (`ADMIN_EMAILS` or a stored admin role) → `/admin`: search sheets by
-  sheet ID, create a sheet with an optional custom ID and assigned Gmail address,
-  assign or move existing sheets, and open a sheet to print or download `.docx`.
-- **Valid user** (at least one sheet assigned to their email) → `/dashboard`: the
-  assigned 5x5 boards, tappable tiles with saved progress, and the C3 MCQ that
-  unlocks the free space when answered correctly.
+- **Admin** (`ADMIN_EMAILS` or a stored admin role) → `/admin`: add students
+  with their Google email and optional parent details. Use **Create bingo sheet**
+  on a student's row to generate and assign a sheet using their saved details.
+  Admins can also assign existing sheets, search sheets, and download printable
+  `.docx` files.
+- **Registered student or account with an assigned sheet** → `/dashboard` to resume recent
+  work. The **Assignments** tab lists every assigned sheet. Each sheet opens
+  on its own page with saved tile marks and the C3 multiple-choice question.
 - **Anyone else** → an error page: *“You are not a valid user in the system.
   Please contact an administrator for access.”*
 
@@ -108,7 +110,8 @@ require a session and allow only the assigned account or an admin.
   `GOOGLE_CLIENT_SECRET` is empty in `.env`.
 - **Signed out after every restart** — set a stable `SESSION_SECRET`.
 
-JSON views of global content: `GET /api/bingo-questions`, `GET /api/mc-questions`.
+Clues are available at `GET /api/bingo-questions`. Only admins can use
+`GET /api/mc-questions` and `POST /verify-answer` to access answer keys.
 Admin-only: `GET /api/sheets`, `GET /api/sheets/{sheet_id}` and `GET /api/export`
 (one `carnatic_bingo_data.json` download with all three tables).
 

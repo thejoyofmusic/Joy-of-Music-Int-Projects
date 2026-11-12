@@ -16,6 +16,7 @@ import logging
 import random
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -24,7 +25,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -51,6 +52,7 @@ from app.schemas import (
     BingoSheetCreate,
     MultipleChoiceQuestionListSchema,
     SheetAssignment,
+    StudentDetails,
     normalize_sheet_id,
 )
 from app.seed import seed_from_docx
@@ -408,10 +410,9 @@ def home(request: Request, db: Session = Depends(get_db)):
                 "local_login": auth.local_login_enabled() and auth.request_is_local(request),
             },
         )
-    if user.is_admin:
-        return RedirectResponse(url="/admin", status_code=303)
-    if auth.assigned_sheet_count(db, user.email) > 0:
-        return RedirectResponse(url="/dashboard", status_code=303)
+    destination = auth.landing_url(db, user)
+    if destination:
+        return RedirectResponse(url=destination, status_code=303)
     return error_page(request, UNAUTHORIZED_MESSAGE, 403, user=user)
 
 
@@ -662,51 +663,80 @@ def admin_home(
     request: Request,
     q: str = "",
     added: str = "",
+    updated: str = "",
     removed: str = "",
     deleted: int = 0,
+    deleted_sheet: str = "",
     db: Session = Depends(get_db),
 ):
-    """All sheets, searchable by sheet_id, plus creation/assignment forms."""
+    """Search sheets by ID, student or parent details, or assigned email."""
     user, failure = admin_guard(request, db)
     if failure:
         return failure
 
     search = q.strip()
-    query = db.query(BingoSheet)
-    if search:
-        query = query.filter(
-            func.upper(BingoSheet.sheet_id).like(f"%{normalize_sheet_id(search)}%")
+    sheet_query = db.query(BingoSheet).order_by(BingoSheet.id.desc())
+    account_query = db.query(User).filter(User.role != "admin").order_by(User.email)
+    sheet_fields = (
+        BingoSheet.sheet_id,
+        BingoSheet.student_name,
+        BingoSheet.parent_name,
+        BingoSheet.parent_email,
+        BingoSheet.parent_whatsapp,
+        BingoSheet.assigned_email,
+    )
+    account_fields = (
+        User.student_name, User.email, User.parent_name, User.parent_email, User.parent_whatsapp
+    )
+    matching_sheets = sheet_query
+    matching_accounts = account_query
+    for term in search.split():
+        matching_sheets = matching_sheets.filter(
+            or_(*(field.icontains(term, autoescape=True) for field in sheet_fields))
         )
-    sheets = query.order_by(BingoSheet.id.desc()).all()
+        matching_accounts = matching_accounts.filter(
+            or_(*(field.icontains(term, autoescape=True) for field in account_fields))
+        )
+    all_accounts = account_query.all()
+    matched_accounts = {account.email for account in matching_accounts.all()} if search else {
+        account.email for account in all_accounts
+    }
+    known_accounts = {account.email for account in all_accounts}
+    matching_ids = {sheet.id for sheet in matching_sheets.all()} if search else set()
+    sheets_by_student = {email: [] for email in known_accounts}
+    other_sheets = []
+    board_counts = {}
+    for sheet in sheet_query.all():
+        email = normalize_email(sheet.assigned_email)
+        board_counts[email] = board_counts.get(email, 0) + 1
+        if search and sheet.id not in matching_ids and email not in matched_accounts:
+            continue
+        if email in known_accounts:
+            sheets_by_student[email].append(sheet)
+        else:
+            other_sheets.append(sheet)
 
+    accounts = [
+        account for account in all_accounts
+        if account.email in matched_accounts or sheets_by_student[account.email]
+    ]
     return templates.TemplateResponse(
         request,
         "admin.html",
         {
             "user": user,
-            "sheets": sheets,
             "query": search,
-            "matched": len(sheets),
-            "total_sheets": db.query(func.count(BingoSheet.id)).scalar() or 0,
-            "assigned_sheets": (
-                db.query(func.count(BingoSheet.id))
-                .filter(BingoSheet.assigned_email.isnot(None))
-                .scalar()
-                or 0
-            ),
-            "accounts": db.query(User).order_by(User.email).all(),
-            "board_counts": dict(
-                db.query(
-                    func.lower(BingoSheet.assigned_email), func.count(BingoSheet.id)
-                )
-                .group_by(func.lower(BingoSheet.assigned_email))
-                .all()
-            ),
+            "matched": len(other_sheets) + sum(map(len, sheets_by_student.values())),
+            "accounts": accounts,
+            "assignment_accounts": all_accounts,
+            "sheets_by_student": sheets_by_student,
+            "other_sheets": other_sheets,
+            "board_counts": board_counts,
             "added": added,
+            "updated": updated,
             "removed": removed,
             "deleted": deleted,
-            "suggested_sheet_id": new_sheet_id(),
-            "admin_emails": sorted(auth.admin_emails()),
+            "deleted_sheet": deleted_sheet,
         },
     )
 
@@ -725,6 +755,17 @@ async def admin_create_sheet(request: Request, db: Session = Depends(get_db)):
         }
     except Exception:
         return error_page(request, "Could not read the form.", 400, user=user)
+
+    student_email = normalize_email(form_data.get("student_email", ""))
+    if student_email:
+        account = db.query(User).filter_by(email=student_email).first()
+        if account is None or account.is_admin:
+            return error_page(request, "Student account not found.", 404, user=user)
+        form_data["assigned_email"] = account.email
+        form_data["student_name"] = account.student_name or account.email.split("@")[0][:120]
+        form_data["parent_name"] = account.parent_name
+        form_data["parent_email"] = account.parent_email
+        form_data["parent_whatsapp"] = account.parent_whatsapp
 
     question_ids, mcq_id, pool_error = random_board(db)
     if pool_error:
@@ -781,6 +822,34 @@ def admin_sheet_detail(
     return templates.TemplateResponse(request, "sheet_detail.html", context)
 
 
+@app.post("/admin/sheet/{identifier}/delete")
+def admin_delete_sheet(identifier: str, request: Request, db: Session = Depends(get_db)):
+    user, failure = admin_guard(request, db)
+    if failure:
+        return failure
+
+    sheet = find_sheet(db, identifier)
+    if sheet is None:
+        return error_page(request, "Sheet not found.", 404, user=user)
+
+    sheet_id = sheet.sheet_id
+    db.delete(sheet)
+    db.commit()
+    logger.info("Admin %s deleted sheet %s", user.email, sheet_id)
+    return RedirectResponse(url=f"/admin?deleted_sheet={quote(sheet_id, safe='')}", status_code=303)
+
+
+def assign_sheet(sheet: BingoSheet, email: Optional[str]) -> None:
+    if normalize_email(sheet.assigned_email) != normalize_email(email):
+        sheet.marked_cells = [position for position in sheet.marked if position != MCQ_POSITION]
+        sheet.mcq_incorrect_attempts = 0
+        sheet.mcq_wrong_choices = 0
+        sheet.mcq_attempts = 0
+        sheet.mcq_solved = False
+        sheet.last_activity_at = None
+    sheet.assigned_email = email
+
+
 @app.post("/admin/sheet/{identifier}/assign")
 async def admin_assign_sheet(
     identifier: str, request: Request, db: Session = Depends(get_db)
@@ -810,7 +879,7 @@ async def admin_assign_sheet(
             request, "sheet_detail.html", context, status_code=422
         )
 
-    sheet.assigned_email = assignment.assigned_email
+    assign_sheet(sheet, assignment.assigned_email)
     db.commit()
     logger.info(
         "Admin %s assigned sheet %s to %s",
@@ -838,19 +907,26 @@ async def admin_assign_existing(request: Request, db: Session = Depends(get_db))
     except ValidationError as exc:
         return error_page(request, validation_error_message(exc), 422, user=user)
 
-    sheet.assigned_email = assignment.assigned_email
+    assign_sheet(sheet, assignment.assigned_email)
     db.commit()
     return RedirectResponse(url="/admin", status_code=303)
 
 
+def update_student_details(db: Session, account: User, details: dict[str, str]) -> None:
+    for field, value in details.items():
+        setattr(account, field, value)
+    if details:
+        sheet_details = dict(details)
+        if sheet_details.get("student_name") == "":
+            sheet_details["student_name"] = account.email.split("@")[0][:120]
+        db.query(BingoSheet).filter(
+            func.lower(BingoSheet.assigned_email) == account.email
+        ).update(sheet_details, synchronize_session=False)
+
+
 @app.post("/admin/students")
 async def admin_add_student(request: Request, db: Session = Depends(get_db)):
-    """Add a student from an email alone: account + first board in one step.
-
-    Google sign-in already creates an account, but only for someone who thinks to
-    sign in first. This pre-creates the account and assigns a board, which is what
-    grants access: the address must be on the ``app_user`` row and own a sheet.
-    """
+    """Register a student so an admin can assign a sheet later."""
     user, failure = admin_guard(request, db)
     if failure:
         return failure
@@ -874,37 +950,48 @@ async def admin_add_student(request: Request, db: Session = Depends(get_db)):
             user=user,
         )
 
-    parent_email = values.get("parent_email") or ""
-    if parent_email and not auth.EMAIL_PATTERN.match(parent_email):
-        return error_page(
-            request, "That parent email does not look valid.", 422, user=user
-        )
+    try:
+        details = StudentDetails.model_validate(values)
+    except ValidationError as exc:
+        return error_page(request, validation_error_message(exc), 422, user=user)
 
-    question_ids, mcq_id, pool_error = random_board(db)
-    if pool_error:
-        return error_page(request, pool_error, 400, user=user)
-
-    if db.query(User).filter(User.email == email).first() is None:
-        db.add(User(email=email, role=auth.role_for_email(email)))
-
-    sheet = BingoSheet(
-        sheet_id=new_sheet_id(),
-        student_name=values.get("student_name") or email.split("@")[0],
-        parent_name=values.get("parent_name") or "",
-        parent_email=parent_email,
-        parent_whatsapp=values.get("parent_whatsapp") or "",
-        assigned_email=email,
-        marked_cells=[],
-        question_list=question_ids,
-        multiple_choice_question_id=mcq_id,
+    account = db.query(User).filter_by(email=email).first()
+    if account is None:
+        account = User(email=email, role=auth.role_for_email(email))
+        db.add(account)
+    if not account.is_admin:
+        account.registered_student = True
+    update_student_details(
+        db, account, {field: value for field, value in details.model_dump().items() if value}
     )
-    db.add(sheet)
     db.commit()
-    db.refresh(sheet)
-    logger.info(
-        "Admin %s added student %s with sheet %s", user.email, email, sheet.sheet_id
-    )
-    return RedirectResponse(url=f"/admin?added={sheet.sheet_id}", status_code=303)
+    logger.info("Admin %s saved student details for %s", user.email, email)
+    return RedirectResponse(url=f"/admin?added={quote(email, safe='')}", status_code=303)
+
+
+@app.post("/admin/students/{student_id}/edit")
+async def admin_edit_student(student_id: int, request: Request, db: Session = Depends(get_db)):
+    user, failure = admin_guard(request, db)
+    if failure:
+        return failure
+
+    account = db.get(User, student_id)
+    if account is None or account.is_admin:
+        return error_page(request, "Student account not found.", 404, user=user)
+
+    try:
+        form = await request.form()
+    except Exception:
+        return error_page(request, "Could not read the form.", 400, user=user)
+    try:
+        details = StudentDetails.model_validate(dict(form))
+    except ValidationError as exc:
+        return error_page(request, validation_error_message(exc), 422, user=user)
+
+    account.registered_student = True
+    update_student_details(db, account, details.model_dump(exclude_unset=True))
+    db.commit()
+    return RedirectResponse(url=f"/admin?updated={quote(account.email, safe='')}", status_code=303)
 
 
 @app.post("/admin/students/remove")
@@ -956,7 +1043,7 @@ async def admin_remove_student(request: Request, db: Session = Depends(get_db)):
             db.delete(sheet)
     else:
         for sheet in detached:
-            sheet.assigned_email = None
+            assign_sheet(sheet, None)
 
     db.delete(account)
     db.commit()
@@ -977,8 +1064,9 @@ async def admin_remove_student(request: Request, db: Session = Depends(get_db)):
 # User dashboard
 # ---------------------------------------------------------------------------
 @app.get("/dashboard")
+@app.get("/dashboard/assignments")
 def dashboard(request: Request, db: Session = Depends(get_db)):
-    """The signed-in user's assigned boards, with saved progress."""
+    """Show recent work or list every assignment for the signed-in student."""
     user = auth.current_user(request, db)
     if user is None:
         return login_redirect(request)
@@ -988,16 +1076,28 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     sheets = (
         db.query(BingoSheet)
         .filter(func.lower(BingoSheet.assigned_email) == user.email)
-        .order_by(BingoSheet.id)
+        .order_by(BingoSheet.id.desc())
         .all()
     )
-    if not sheets:
+    if not sheets and not user.registered_student:
         return error_page(request, UNAUTHORIZED_MESSAGE, 403, user=user)
 
+    assignments = request.url.path == "/dashboard/assignments"
+    recent = sorted(
+        (sheet for sheet in sheets if sheet.last_activity_at or sheet.marked or sheet.mcq_attempts),
+        key=lambda sheet: (sheet.last_activity_at or datetime.min, sheet.id),
+        reverse=True,
+    )[:3]
     return templates.TemplateResponse(
         request,
         "dashboard.html",
-        {"user": user, "boards": [sheet_view(db, sheet) for sheet in sheets]},
+        {
+            "user": user,
+            "student_name": user.student_name or (sheets[0].student_name if sheets else ""),
+            "active_tab": "assignments" if assignments else "dashboard",
+            "sheets": sheets if assignments else recent or sheets[:1],
+            "has_recent_work": bool(recent),
+        },
     )
 
 
@@ -1017,6 +1117,22 @@ def dashboard_sheet(
     return user, sheet, None
 
 
+@app.get("/dashboard/sheet/{identifier}")
+def play_sheet(identifier: str, request: Request, db: Session = Depends(get_db)):
+    user, sheet, failure = dashboard_sheet(request, db, identifier)
+    if user is None:
+        return login_redirect(request)
+    if failure is not None:
+        message = "Sheet not found." if failure.status_code == 404 else "This sheet is not assigned to you."
+        return error_page(request, message, failure.status_code, user=user)
+    if user.is_admin:
+        return RedirectResponse(url=f"/admin/sheet/{sheet.sheet_id}", status_code=303)
+
+    context = sheet_view(db, sheet)
+    context.update({"user": user, "active_tab": "assignments"})
+    return templates.TemplateResponse(request, "play_sheet.html", context)
+
+
 @app.post("/dashboard/sheet/{identifier}/state")
 async def dashboard_sheet_state(
     identifier: str, request: Request, db: Session = Depends(get_db)
@@ -1031,20 +1147,15 @@ async def dashboard_sheet_state(
     except Exception:
         return JSONResponse({"error": "Invalid request body"}, status_code=400)
 
-    marked = list(sheet.marked)
+    marked = [position for position in sheet.marked if position != MCQ_POSITION]
     if "cells" in payload:
         raw_cells = payload["cells"]
         if not isinstance(raw_cells, (list, tuple)):
             return JSONResponse(
                 {"error": "cells must be a list of board positions"}, status_code=400
             )
-        # C3 is earned through the MCQ, so a bulk replace cannot add it.
-        already_unlocked = MCQ_POSITION in sheet.marked
-        marked = [
-            position
-            for position in normalize_marked_cells(raw_cells)
-            if position != MCQ_POSITION or already_unlocked
-        ]
+        marked = [position for position in normalize_marked_cells(raw_cells)
+                  if position != MCQ_POSITION]
     else:
         position = str(payload.get("cell") or "").strip().upper()
         if position == MCQ_POSITION:
@@ -1062,6 +1173,7 @@ async def dashboard_sheet_state(
             marked.append(position)
 
     sheet.marked_cells = normalize_marked_cells(marked)
+    sheet.last_activity_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     return JSONResponse(
         {
@@ -1080,6 +1192,9 @@ async def dashboard_verify(
     user, sheet, failure = dashboard_sheet(request, db, identifier)
     if failure:
         return failure
+
+    if sheet.mcq_solved:
+        return JSONResponse({"correct": True, "marked": sheet.marked, "already_solved": True})
 
     mc_question = db.get(
         MultipleChoiceQuestionList, sheet.multiple_choice_question_id
@@ -1104,12 +1219,33 @@ async def dashboard_verify(
     if error:
         return JSONResponse({"correct": False, "error": error}, status_code=400)
 
-    if result["correct"]:
-        sheet.marked_cells = normalize_marked_cells(list(sheet.marked) + [MCQ_POSITION])
-        db.commit()
-        result["marked"] = sheet.marked
+    correct = result["correct"]
+    counters = {
+        BingoSheet.mcq_attempts: BingoSheet.mcq_attempts + 1,
+        BingoSheet.last_activity_at: datetime.now(timezone.utc).replace(tzinfo=None),
+    }
+    unsolved_sheet = db.query(BingoSheet).filter_by(id=sheet.id, mcq_solved=False)
+    if correct:
+        counters[BingoSheet.mcq_solved] = True
+    else:
+        selected = selected_option_index(selected_raw, list(mc_question.options))
+        if selected is None or selected >= len(OPTION_LETTERS):
+            return JSONResponse({"correct": False, "error": "Invalid answer choice."}, status_code=400)
+        choice_bit = 1 << selected
+        unsolved_sheet = unsolved_sheet.filter(
+            BingoSheet.mcq_wrong_choices.bitwise_and(choice_bit) == 0
+        )
+        counters[BingoSheet.mcq_wrong_choices] = BingoSheet.mcq_wrong_choices.bitwise_or(choice_bit)
+        counters[BingoSheet.mcq_incorrect_attempts] = BingoSheet.mcq_incorrect_attempts + 1
 
-    return JSONResponse(result)
+    updated = unsolved_sheet.update(counters)
+    db.commit()
+    if not updated:
+        if sheet.mcq_solved:
+            return JSONResponse({"correct": True, "marked": sheet.marked, "already_solved": True})
+        return JSONResponse({"correct": False, "marked": sheet.marked, "already_attempted": True})
+    return JSONResponse({"correct": correct, "marked": sheet.marked})
+
 
 
 # ---------------------------------------------------------------------------
@@ -1383,8 +1519,11 @@ def api_bingo_questions(db: Session = Depends(get_db)):
 
 
 @app.get("/api/mc-questions")
-def api_mc_questions(db: Session = Depends(get_db)):
-    """Every stored multiple choice question, as JSON."""
+def api_mc_questions(request: Request, db: Session = Depends(get_db)):
+    """Return the question bank and answer keys to an administrator."""
+    _, failure = api_admin_guard(request, db)
+    if failure:
+        return failure
     rows = db.query(MultipleChoiceQuestionList).order_by(MultipleChoiceQuestionList.id).all()
     return [MultipleChoiceQuestionListSchema.model_validate(row) for row in rows]
 
@@ -1457,13 +1596,17 @@ def api_export(request: Request, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 @app.post("/verify-answer")
 async def verify_answer(request: Request, db: Session = Depends(get_db)):
-    """Verify a selected MCQ answer without needing a session.
+    """Verify a selected MCQ answer for an administrator.
 
     Accepts either a JSON body ({"mcqId": 1, "selectedAnswer": 2}) or a form post
     (mcq_id / selected_answer). selectedAnswer may be a 0-based option index, a
     letter (A-D), or the option text. The dashboard uses the sheet-scoped
     ``/dashboard/sheet/{id}/verify`` route, which also saves progress.
     """
+    _, failure = api_admin_guard(request, db)
+    if failure:
+        return failure
+
     try:
         payload = await request_payload(request)
     except Exception:

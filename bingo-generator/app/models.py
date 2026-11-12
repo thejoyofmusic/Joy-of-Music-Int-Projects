@@ -29,7 +29,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, false
 from sqlalchemy.orm import relationship, validates
 
 from app.database import Base
@@ -90,6 +90,11 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     email = Column(String, nullable=False, unique=True, index=True)
     role = Column(String, nullable=False, default=ROLE_USER)
+    registered_student = Column(Boolean, nullable=False, default=False, server_default=false())
+    student_name = Column(String, nullable=False, default="", server_default="")
+    parent_name = Column(String, nullable=False, default="", server_default="")
+    parent_email = Column(String, nullable=False, default="", server_default="")
+    parent_whatsapp = Column(String, nullable=False, default="", server_default="")
     created_at = Column(
         DateTime,
         nullable=False,
@@ -192,8 +197,14 @@ class BingoSheet(Base):
     # Gmail account allowed to play this sheet; NULL means admin-only.
     assigned_email = Column(String, index=True, nullable=True)
 
-    # Board positions the player has marked, e.g. ["A1", "C3"]; progress is saved.
+    # Tile marks and the C3 solution are saved independently.
     marked_cells = Column(JSON, nullable=False, default=list)
+    last_activity_at = Column(DateTime, nullable=True)
+    mcq_solved = Column(Boolean, nullable=False, default=False, server_default=false())
+    mcq_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    # Bit 0 represents choice A, bit 1 choice B, and so on.
+    mcq_wrong_choices = Column(Integer, nullable=False, default=0, server_default="0")
+    mcq_incorrect_attempts = Column(Integer, nullable=False, default=0, server_default="0")
 
     # Exactly 24 integer ids into bingo_question_list, ordered A1..E5 skipping C3.
     question_list = Column(JSON, nullable=False)
@@ -214,7 +225,11 @@ class BingoSheet(Base):
     @property
     def marked(self) -> List[str]:
         """Saved board progress, tolerant of legacy/empty values."""
-        return normalize_marked_cells(self.marked_cells)
+        marked = [position for position in normalize_marked_cells(self.marked_cells)
+                  if position != MCQ_POSITION]
+        if self.mcq_solved:
+            marked.append(MCQ_POSITION)
+        return marked
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<BingoSheet id={self.id} sheet_id={self.sheet_id!r} student_name={self.student_name!r}>"
