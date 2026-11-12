@@ -109,6 +109,45 @@ MIGRATIONS: tuple[Migration, ...] = (
             """,
         ),
     ),
+    Migration(
+        version=3,
+        name="mcq_incorrect_attempts",
+        statements=(
+            "ALTER TABLE bingo_sheet ADD COLUMN mcq_incorrect_attempts INTEGER NOT NULL DEFAULT 0",
+        ),
+    ),
+    Migration(
+        version=4,
+        name="mcq_total_attempts",
+        statements=(
+            "ALTER TABLE bingo_sheet ADD COLUMN mcq_attempts INTEGER NOT NULL DEFAULT 0",
+            "UPDATE bingo_sheet SET mcq_attempts = mcq_incorrect_attempts",
+        ),
+    ),
+    Migration(
+        version=5,
+        name="student_details",
+        statements=(
+            "ALTER TABLE app_user ADD COLUMN student_name VARCHAR NOT NULL DEFAULT ''",
+            "ALTER TABLE app_user ADD COLUMN parent_name VARCHAR NOT NULL DEFAULT ''",
+            "ALTER TABLE app_user ADD COLUMN parent_email VARCHAR NOT NULL DEFAULT ''",
+            "ALTER TABLE app_user ADD COLUMN parent_whatsapp VARCHAR NOT NULL DEFAULT ''",
+            *(
+                f"""
+                UPDATE app_user
+                   SET {field} = COALESCE((
+                       SELECT {field} FROM bingo_sheet
+                        WHERE lower(assigned_email) = app_user.email
+                        ORDER BY CASE WHEN parent_name <> '' OR parent_email <> ''
+                                           OR parent_whatsapp <> '' THEN 0 ELSE 1 END,
+                                 id DESC LIMIT 1
+                   ), '')
+                 WHERE role = 'user'
+                """
+                for field in ("student_name", "parent_name", "parent_email", "parent_whatsapp")
+            ),
+        ),
+    ),
 )
 
 

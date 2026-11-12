@@ -118,13 +118,18 @@ class BingoSheetCreate(BaseModel):
     question_list: List[int] = Field(min_length=GRID_CELL_COUNT, max_length=GRID_CELL_COUNT)
     multiple_choice_question_id: int = Field(gt=0)
 
-    @field_validator("student_name", "parent_name")
+    @field_validator("student_name")
     @classmethod
     def _name_not_blank(cls, value: str) -> str:
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("must not be blank")
         return cleaned
+
+    @field_validator("parent_name")
+    @classmethod
+    def _valid_parent_name(cls, value: str) -> str:
+        return cls._name_not_blank(value)
 
     @field_validator("parent_email")
     @classmethod
@@ -163,6 +168,25 @@ class AdminSheetCreate(BingoSheetCreate):
     sheet is assigned to (unassigned sheets stay admin-only).
     """
 
+    parent_name: str = Field(default="", max_length=120)
+    parent_email: str = ""
+    parent_whatsapp: str = ""
+
+    @field_validator("parent_name")
+    @classmethod
+    def _valid_parent_name(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("parent_email")
+    @classmethod
+    def _valid_email(cls, value: str) -> str:
+        return super()._valid_email(value) if value.strip() else ""
+
+    @field_validator("parent_whatsapp")
+    @classmethod
+    def _valid_whatsapp(cls, value: str) -> str:
+        return super()._valid_whatsapp(value) if value.strip() else ""
+
     sheet_id: Optional[str] = None
     assigned_email: Optional[str] = None
 
@@ -184,6 +208,27 @@ class AdminSheetCreate(BingoSheetCreate):
         if value is None or not str(value).strip():
             return None
         return validate_assigned_email(value)
+
+
+class StudentDetails(BaseModel):
+    """Student and parent information saved when an admin registers a student."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    student_name: str = Field(default="", max_length=120)
+    parent_name: str = Field(default="", max_length=120)
+    parent_email: str = ""
+    parent_whatsapp: str = ""
+
+    @field_validator("parent_email")
+    @classmethod
+    def _valid_email(cls, value: str) -> str:
+        return AdminSheetCreate._valid_email(value)
+
+    @field_validator("parent_whatsapp")
+    @classmethod
+    def _valid_whatsapp(cls, value: str) -> str:
+        return AdminSheetCreate._valid_whatsapp(value)
 
 
 class SheetAssignment(BaseModel):

@@ -432,16 +432,128 @@ def test_admin_search_filters_by_sheet_id(client):
 
     page = client.get("/admin?q=ALPHA1")
     assert page.status_code == 200
-    assert alpha.sheet_id in page.text
-    assert beta.sheet_id not in page.text
+    assert alpha.sheet_id in page.text.split('id="sheet-results"', 1)[1]
+    assert beta.sheet_id not in page.text.split('id="sheet-results"', 1)[1]
 
     page = client.get("/admin?q=beta")
-    assert beta.sheet_id in page.text
-    assert alpha.sheet_id not in page.text
+    assert beta.sheet_id in page.text.split('id="sheet-results"', 1)[1]
+    assert alpha.sheet_id not in page.text.split('id="sheet-results"', 1)[1]
 
     everything = client.get("/admin")
     assert alpha.sheet_id in everything.text
     assert beta.sheet_id in everything.text
+
+
+def test_admin_search_matches_terms_across_sheet_fields(client):
+    target = make_sheet(client, student="Ananya Rao", assigned_email="learner@example.com")
+    other = make_sheet(client, student="Ananya Shah")
+    with SessionLocal() as db:
+        stored = db.get(BingoSheet, target.id)
+        stored.parent_name = "Meera Patel"
+        stored.parent_email = "family@example.com"
+        stored.parent_whatsapp = "+1 (408) 555-0199"
+        db.commit()
+
+    for query in ("RAO anan", "meera", "family@", "555-0199", "learner@", "ANANYA patel"):
+        response = client.get("/admin", params={"q": query})
+        assert response.status_code == 200
+        assert target.sheet_id in response.text.split('id="sheet-results"', 1)[1]
+        assert other.sheet_id not in response.text.split('id="sheet-results"', 1)[1]
+
+    for query in ("Ananya Missing", "%", "_"):
+        response = client.get("/admin", params={"q": query})
+        assert target.sheet_id not in response.text.split('id="sheet-results"', 1)[1]
+        assert other.sheet_id not in response.text.split('id="sheet-results"', 1)[1]
+
+
+def test_admin_search_filters_student_accounts_without_sheets(client):
+    login_as(client, ADMIN_EMAIL)
+    email = unique_email("student-search")
+    client.post("/admin/students", data={
+        "email": email, "student_name": "Tara Kumar", "parent_name": "Priya Sharma",
+    })
+
+    for query, matches in (("tar", True), ("kumar sharm", True), ("tarz", False)):
+        response = client.get("/admin", params={"q": query})
+        rows = response.text.split('id="student-results"', 1)[1].split("</tbody>", 1)[0]
+        assert (email in rows) == matches
+
+
+def test_adding_student_does_not_assign_a_sheet(client):
+    email = unique_email("new-student")
+    existing = make_sheet(client)
+    with SessionLocal() as db:
+        sheet_count = db.query(BingoSheet).count()
+
+    details = {
+        "student_name": "Asha Rao",
+        "parent_name": "Meera Rao",
+        "parent_email": "meera@example.com",
+        "parent_whatsapp": "+1 (408) 555-0199",
+    }
+    response = client.post("/admin/students", data={"email": email, **details})
+    assert response.status_code == 200
+    assert "Student account ready for" in response.text
+    assert "Create bingo sheet" in response.text
+
+    with SessionLocal() as db:
+        assert db.query(User).filter_by(email=email).one()
+        assert db.query(BingoSheet).count() == sheet_count
+
+    response = client.post(
+        "/admin/sheets/assign",
+        data={"sheet_id": existing.sheet_id, "assigned_email": email},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    response = client.post(
+        "/admin/sheets", data={"student_email": email}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    generated_id = response.headers["location"].rsplit("/", 1)[-1]
+    page = client.get("/admin", params={"q": generated_id})
+    student_card = page.text.split('id="student-results"', 1)[1].split("</article>", 1)[0]
+    assert "Asha Rao" in student_card
+    assert generated_id in student_card
+    assert existing.sheet_id not in student_card
+
+    with SessionLocal() as db:
+        sheets = db.query(BingoSheet).filter_by(assigned_email=email).all()
+        assert {sheet.sheet_id for sheet in sheets} == {existing.sheet_id, generated_id}
+        generated = next(sheet for sheet in sheets if sheet.sheet_id == generated_id)
+        assert {field: getattr(generated, field) for field in details} == details
+
+
+def test_edit_student_updates_profile_and_assigned_sheets(client):
+    email = unique_email("edit-details")
+    sheet = make_sheet(client, assigned_email=email)
+    client.post("/admin/students", data={"email": email})
+    with SessionLocal() as db:
+        student_id = db.query(User).filter_by(email=email).one().id
+    url = f"/admin/students/{student_id}/edit"
+    details = {
+        "student_name": "Nila Rao",
+        "parent_name": "Asha Rao",
+        "parent_email": "asha@example.com",
+        "parent_whatsapp": "",
+    }
+
+    login_as(client, email)
+    assert client.post(url, data=details).status_code == 403
+    login_as(client, ADMIN_EMAIL)
+    assert client.post(url, data={**details, "parent_email": "invalid"}).status_code == 422
+    response = client.post(url, data=details)
+    assert response.status_code == 200
+    assert "Saved student details" in response.text
+    assert 'value="asha@example.com"' in response.text
+
+    with SessionLocal() as db:
+        account = db.get(User, student_id)
+        stored = db.get(BingoSheet, sheet.id)
+        assert {key: getattr(account, key) for key in details} == details
+        assert {key: getattr(stored, key) for key in details} == details
+        assert account.email == stored.assigned_email == email
 
 
 def test_admin_assigns_existing_sheet_and_user_gains_access(client, monkeypatch):
@@ -464,6 +576,28 @@ def test_admin_assigns_existing_sheet_and_user_gains_access(client, monkeypatch)
     sign_in = sign_in_via_callback(client, monkeypatch, "late.student@example.com")
     assert sign_in.headers["location"] == "/dashboard"
     assert sheet.sheet_id in client.get("/dashboard").text
+
+
+def test_only_admin_can_delete_one_sheet_without_removing_student(client):
+    email = unique_email("delete-sheet")
+    target = make_sheet(client, assigned_email=email)
+    other = make_sheet(client, assigned_email=email)
+    url = f"/admin/sheet/{target.sheet_id}/delete"
+
+    login_as(client, email)
+    assert client.post(url).status_code == 403
+    with SessionLocal() as db:
+        assert db.get(BingoSheet, target.id) is not None
+
+    login_as(client, ADMIN_EMAIL)
+    response = client.post(url)
+    assert response.status_code == 200
+    assert f"Deleted bingo sheet <strong>{target.sheet_id}</strong>" in response.text
+
+    with SessionLocal() as db:
+        assert db.get(BingoSheet, target.id) is None
+        assert db.get(BingoSheet, other.id).assigned_email == email
+        assert db.query(User).filter_by(email=email).one()
 
 
 def test_admin_sheet_detail_and_docx_export(client):
@@ -585,13 +719,23 @@ def test_dashboard_mcq_unlocks_the_free_space(client):
     assert accepted.status_code == 200
     assert accepted.json()["correct"] is True
     assert "C3" in accepted.json()["marked"]
-    assert accepted.json()["correctIndex"] == correct
+    assert set(accepted.json()) == {"correct", "marked"}
+    assert set(rejected.json()) == {"correct", "marked"}
+    assert client.get("/api/mc-questions").status_code == 403
+    assert client.post("/verify-answer", json={"mcqId": mcq.id, "selectedAnswer": correct}).status_code == 403
 
     with SessionLocal() as db:
         stored = db.query(BingoSheet).filter(BingoSheet.sheet_id == sheet.sheet_id).one()
         assert "C3" in stored.marked
 
     assert "FREE ✓" in client.get("/dashboard").text
+
+    login_as(client, ADMIN_EMAIL)
+    page = client.get(f"/admin?q={sheet.sheet_id}")
+    assert "<th>C3 attempts</th>" in page.text
+    assert "<td>2</td>" in page.text
+    assert "1 wrong attempt" in page.text
+    assert "Correct" in page.text
 
 
 # ---------------------------------------------------------------------------

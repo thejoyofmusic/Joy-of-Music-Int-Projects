@@ -90,6 +90,10 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     email = Column(String, nullable=False, unique=True, index=True)
     role = Column(String, nullable=False, default=ROLE_USER)
+    student_name = Column(String, nullable=False, default="", server_default="")
+    parent_name = Column(String, nullable=False, default="", server_default="")
+    parent_email = Column(String, nullable=False, default="", server_default="")
+    parent_whatsapp = Column(String, nullable=False, default="", server_default="")
     created_at = Column(
         DateTime,
         nullable=False,
@@ -192,8 +196,10 @@ class BingoSheet(Base):
     # Gmail account allowed to play this sheet; NULL means admin-only.
     assigned_email = Column(String, index=True, nullable=True)
 
-    # Board positions the player has marked, e.g. ["A1", "C3"]; progress is saved.
+    # Board positions the player has marked, e.g. ["A1", "C3"].
     marked_cells = Column(JSON, nullable=False, default=list)
+    mcq_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    mcq_incorrect_attempts = Column(Integer, nullable=False, default=0, server_default="0")
 
     # Exactly 24 integer ids into bingo_question_list, ordered A1..E5 skipping C3.
     question_list = Column(JSON, nullable=False)

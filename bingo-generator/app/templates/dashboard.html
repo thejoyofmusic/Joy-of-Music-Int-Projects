@@ -111,16 +111,14 @@
                 }
             }
 
-            function markOptions(panel, selected, correctIndex) {
+            function markOptions(panel, selected, correct) {
                 panel.querySelectorAll('input[type="radio"]').forEach(function (radio) {
                     var label = radio.closest('.option-btn');
                     if (!label) { return; }
                     label.classList.remove('correct', 'incorrect');
                     var value = parseInt(radio.value, 10);
-                    if (value === correctIndex) {
-                        label.classList.add('correct');
-                    } else if (value === selected) {
-                        label.classList.add('incorrect');
+                    if (value === selected) {
+                        label.classList.add(correct ? 'correct' : 'incorrect');
                     }
                 });
             }
@@ -185,7 +183,7 @@
                                 showMessage(panel, 'error', data.error || 'Could not verify that answer.');
                                 return;
                             }
-                            markOptions(panel, selected, data.correctIndex);
+                            markOptions(panel, selected, data.correct);
                             if (data.correct) {
                                 var free = document.getElementById(boardId + '-C3');
                                 if (free) {
