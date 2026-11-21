@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review bingo sheets · Carnatic Bingo</title>
+<style>
+* { box-sizing: border-box; }
+body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background: #f4f6f8; color: #243b53; }
+main { max-width: 950px; margin: auto; }
+.card { background: white; border: 1px solid #d9e2ec; border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+h1 { font-size: 24px; }
+h2 { font-size: 19px; margin: 0 0 8px; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+button { background: #0066cc; color: white; border: 1px solid #0066cc; border-radius: 5px; padding: 10px 16px; font: inherit; cursor: pointer; }
+.secondary { color: #0066cc; background: white; }
+a { color: #0066cc; }
+.clues { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 14px 0; }
+textarea, select { width: 100%; font: inherit; padding: 8px; }
+label { display: block; font-weight: 600; margin: 5px 0; }
+summary { cursor: pointer; font-weight: 600; }
+{% include "_sheet_styles.html" %}
+</style>
+</head>
+<body><main>
+<h1>Review bingo sheets</h1>
+<p>Review each board for the student below. Reshuffle to draw a new board, or edit its clues before confirming. Students can open these sheets after confirmation.</p>
+<form method="post" action="/admin/previews/{{ preview.token }}">
+<input type="hidden" name="revision" value="{{ preview.revision }}">
+{% for board in boards %}
+{% set index = loop.index0 %}
+{% set sheet = board.sheet %}
+{% set clues_by_position = board.clues_by_position %}
+{% set marked = board.marked %}
+{% set mc_question = board.mc_question %}
+<section class="card">
+    <h2>Sheet {{ loop.index }} of {{ boards|length }} · {{ sheet.student_name }}</h2>
+    <p>{{ sheet.assigned_email or 'Unassigned' }} · {{ sheet.sheet_id }}</p>
+    {% include "_board.html" %}
+    {% set reveal_answer = true %}
+    {% include "_mcq.html" %}
+    <div class="actions">
+        <button class="secondary" type="submit" name="action" value="reshuffle:{{ index }}">Reshuffle this sheet</button>
+    </div>
+    <details>
+        <summary>Edit clues and C3 question</summary>
+        <label for="mcq-{{ index }}">C3 multiple-choice question</label>
+        <select id="mcq-{{ index }}" name="mcq_{{ index }}">
+            {% for question in mcqs %}
+            <option value="{{ question.id }}"{% if question.id == sheet.multiple_choice_question_id %} selected{% endif %}>{{ question.question }}</option>
+            {% endfor %}
+        </select>
+        <div class="clues">
+            {% for position, clue in clues_by_position.items() %}
+            <div>
+                <label for="clue-{{ index }}-{{ position }}">{{ position }}</label>
+                <textarea id="clue-{{ index }}-{{ position }}" name="clue_{{ index }}_{{ position }}" rows="3" maxlength="500" required>{{ clue }}</textarea>
+            </div>
+            {% endfor %}
+        </div>
+        <button class="secondary" type="submit" name="action" value="save">Update preview</button>
+    </details>
+</section>
+{% endfor %}
+<div class="actions">
+    <button type="submit" name="action" value="confirm">Confirm{% if boards|length > 1 %} all {{ boards|length }} sheets{% endif %} and assign</button>
+    <button class="secondary" type="submit" name="action" value="save_exit">Save and exit</button>
+    <button class="secondary" type="submit" name="action" value="cancel" formnovalidate onclick="return confirm('Discard these unassigned boards?');">Discard preview</button>
+</div>
+</form>
+</main></body>
+</html>

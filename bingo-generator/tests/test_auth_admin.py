@@ -8,6 +8,7 @@ creation, role assignment and redirect rules.
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from io import BytesIO
 
@@ -18,7 +19,7 @@ from fastapi.testclient import TestClient
 from app import auth
 from app.database import SessionLocal
 from app.main import app
-from app.models import GRID_CELL_COUNT, BingoSheet, MultipleChoiceQuestionList, User
+from app.models import GRID_POSITIONS, GRID_CELL_COUNT, BingoSheet, BingoPreview, MultipleChoiceQuestionList, User
 from tests.auth_helpers import login_as, start_google_login
 
 ADMIN_EMAIL = "admin@example.com"
@@ -39,6 +40,14 @@ def clean_session(client):
     client.cookies.clear()
     yield
     client.cookies.clear()
+
+
+def confirm_preview(client, response):
+    location = response.headers.get("location") or response.url.path
+    assert location.startswith("/admin/previews/")
+    page = client.get(location)
+    revision = re.search(r'name="revision" value="(\d+)"', page.text).group(1)
+    return client.post(location, data={"action": "confirm", "revision": revision}, follow_redirects=False)
 
 
 def make_sheet(
@@ -64,6 +73,7 @@ def make_sheet(
     )
     assert response.status_code == 303, response.text
 
+    response = confirm_preview(client, response)
     created_id = response.headers["location"].rsplit("/", 1)[-1]
     with SessionLocal() as db:
         return db.query(BingoSheet).filter(BingoSheet.sheet_id == created_id).one()
@@ -496,7 +506,7 @@ def test_adding_student_does_not_assign_a_sheet(client):
     response = client.post("/admin/students", data={"email": email, **details})
     assert response.status_code == 200
     assert "Student account ready for" in response.text
-    assert "Create bingo sheet" in response.text
+    assert "Generate bingo sheets" in response.text
 
     with SessionLocal() as db:
         assert db.query(User).filter_by(email=email).one()
@@ -513,6 +523,7 @@ def test_adding_student_does_not_assign_a_sheet(client):
         "/admin/sheets", data={"student_email": email}, follow_redirects=False
     )
     assert response.status_code == 303
+    response = confirm_preview(client, response)
     generated_id = response.headers["location"].rsplit("/", 1)[-1]
     page = client.get("/admin", params={"q": generated_id})
     student_card = page.text.split('id="student-results"', 1)[1].split("</article>", 1)[0]
@@ -862,3 +873,221 @@ def test_sign_in_is_idempotent_for_existing_accounts(client):
         assert second.id == first_id
         assert db.query(User).filter(User.email == email).count() == 1
         assert not second.is_admin
+
+
+def test_csv_import_skips_duplicates_and_rejects_invalid_batch(client):
+    login_as(client, ADMIN_EMAIL)
+    email = unique_email("csv")
+    upload = (
+        "email,student_name,parent_name,parent_email,parent_whatsapp\r\n"
+        f"{email},Tara,Ravi,ravi@example.com,+15550109999\r\n"
+        f"{email.upper()},Duplicate,,,\r\n"
+    )
+    response = client.post("/admin/students/import", files={"file": ("students.csv", upload)})
+    assert response.status_code == 200
+    assert "Imported 1 student." in response.text
+    assert "Duplicate emails skipped" in response.text
+    with SessionLocal() as db:
+        account = db.query(User).filter_by(email=email).one()
+        assert account.student_name == "Tara"
+        assert account.registered_student
+        assert db.query(BingoSheet).filter_by(assigned_email=email).count() == 0
+
+    duplicate = client.post("/admin/students", data={"email": email, "student_name": "Changed"})
+    assert duplicate.status_code == 409
+    imported_again = client.post("/admin/students/import", files={"file": ("students.csv", upload)})
+    assert "Imported 0 students." in imported_again.text
+
+    second = unique_email("invalid-batch")
+    invalid = f"email,parent_email\n{second},parent@example.com\ninvalid,bad\n"
+    response = client.post("/admin/students/import", files={"file": ("bad.csv", invalid)})
+    assert response.status_code == 422
+    with SessionLocal() as db:
+        assert db.query(User).filter_by(email=second).first() is None
+        assert db.query(User).filter_by(email=email).one().student_name == "Tara"
+    template = client.get("/admin/students/import-template")
+    assert template.status_code == 200
+    assert template.text.startswith("email,student_name")
+
+
+def test_bulk_generation_and_copy_reset_progress(client):
+    login_as(client, ADMIN_EMAIL)
+    email = unique_email("bulk")
+    client.post("/admin/students", data={"email": email, "student_name": "Bulk Student"})
+    response = client.post("/admin/sheets", data={"student_email": email, "count": 3})
+    assert response.status_code == 200
+    assert "Review bingo sheets" in response.text
+    response = confirm_preview(client, response)
+    response = client.get(response.headers["location"])
+    assert "Created and assigned 3 bingo sheets." in response.text
+    with SessionLocal() as db:
+        sheets = db.query(BingoSheet).filter_by(assigned_email=email).all()
+        assert len(sheets) == 3
+        assert len({sheet.sheet_id for sheet in sheets}) == 3
+        source = sheets[0]
+        source.marked_cells = ["A1"]
+        source.mcq_solved = True
+        source.mcq_attempts = 2
+        source.clue_overrides = {"A1": "Custom clue"}
+        db.commit()
+        source_id = source.sheet_id
+        source_questions = list(source.question_list)
+    response = client.post(f"/admin/sheet/{source_id}/duplicate", follow_redirects=False)
+    assert response.status_code == 303
+    response = confirm_preview(client, response)
+    copy_id = response.headers["location"].rsplit("/", 1)[-1]
+    with SessionLocal() as db:
+        copy = db.query(BingoSheet).filter_by(sheet_id=copy_id).one()
+        assert copy.sheet_id != source_id
+        assert copy.question_list == source_questions
+        assert copy.clue_overrides["A1"] == "Custom clue"
+        assert copy.assigned_email == email
+        assert copy.marked == []
+        assert copy.mcq_attempts == 0
+        assert copy.mcq_incorrect_attempts == 0
+    assert client.post("/admin/sheets", data={"student_email": email, "count": 0}).status_code == 422
+    assert client.post("/admin/sheets", data={"student_email": email, "count": 101}).status_code == 422
+
+
+def test_edit_sheet_clues_are_private_and_used_in_download(client):
+    sheet = make_sheet(client)
+    with SessionLocal() as db:
+        stored = db.get(BingoSheet, sheet.id)
+        stored.marked_cells = ["A1", "A2"]
+        stored.mcq_solved = True
+        stored.mcq_attempts = 2
+        stored.mcq_incorrect_attempts = 1
+        db.commit()
+
+    page = client.get(f"/admin/sheet/{sheet.sheet_id}/edit")
+    assert page.status_code == 200
+    from app.main import ordered_clue_texts
+    with SessionLocal() as db:
+        stored = db.get(BingoSheet, sheet.id)
+        old_clues = ordered_clue_texts(db, stored)
+        original_mcq = stored.multiple_choice_question_id
+        new_mcq = db.query(MultipleChoiceQuestionList).filter(
+            MultipleChoiceQuestionList.id != original_mcq
+        ).first().id
+
+    form = dict(zip(GRID_POSITIONS, old_clues))
+    form.update({"mcq_id": original_mcq, "A1": "Edited clue for this sheet"})
+    assert client.post(f"/admin/sheet/{sheet.sheet_id}/edit", data={**form, "A2": ""}).status_code == 422
+    response = client.post(f"/admin/sheet/{sheet.sheet_id}/edit", data=form)
+    assert response.status_code == 200
+    assert "Edited clue for this sheet" in response.text
+    with SessionLocal() as db:
+        stored = db.get(BingoSheet, sheet.id)
+        assert stored.marked == ["A2", "C3"]
+        assert stored.mcq_attempts == 2
+        assert stored.clue_overrides["A1"] == "Edited clue for this sheet"
+
+    download = client.get(f"/sheet/{sheet.sheet_id}/download")
+    assert download.status_code == 200
+    document = Document(BytesIO(download.content))
+    assert any("Edited clue for this sheet" in cell.text
+               for table in document.tables for row in table.rows for cell in row.cells)
+
+    form["mcq_id"] = new_mcq
+    assert client.post(f"/admin/sheet/{sheet.sheet_id}/edit", data=form).status_code == 200
+    with SessionLocal() as db:
+        stored = db.get(BingoSheet, sheet.id)
+        assert stored.marked == ["A2"]
+        assert not stored.mcq_solved
+        assert stored.mcq_attempts == stored.mcq_incorrect_attempts == 0
+
+    other = make_sheet(client)
+    assert "Edited clue for this sheet" not in client.get(f"/admin/sheet/{other.sheet_id}").text
+
+
+def test_new_admin_tools_reject_students(client):
+    email = unique_email("tools-access")
+    sheet = make_sheet(client, assigned_email=email)
+    login_as(client, email)
+    for path in ("/admin/students/import-template", f"/admin/sheet/{sheet.sheet_id}/edit"):
+        assert client.get(path).status_code == 403
+    for path in ("/admin/students/import", f"/admin/sheet/{sheet.sheet_id}/edit",
+                 f"/admin/sheet/{sheet.sheet_id}/duplicate"):
+        assert client.post(path).status_code == 403
+
+
+def test_preview_reshuffle_edit_cancel_and_confirm_once(client):
+    login_as(client, ADMIN_EMAIL)
+    email = unique_email("preview")
+    client.post("/admin/students", data={"email": email, "student_name": "Preview Student"})
+    response = client.post("/admin/sheets", data={"student_email": email, "count": 2}, follow_redirects=False)
+    url = response.headers["location"]
+    token = url.rsplit("/", 1)[-1]
+    with SessionLocal() as db:
+        assert db.query(BingoSheet).filter_by(assigned_email=email).count() == 0
+        original = db.get(BingoPreview, token).items
+    assert client.get(url).text.count('class="grid-display"') == 2
+
+    reshuffled = client.post(url, data={"revision": 0, "action": "reshuffle:0"}, follow_redirects=False)
+    assert reshuffled.status_code == 303
+    with SessionLocal() as db:
+        preview = db.get(BingoPreview, token)
+        assert preview.revision == 1
+        assert preview.items[0]["question_list"] != original[0]["question_list"]
+        assert preview.items[1]["question_list"] == original[1]["question_list"]
+
+    assert client.post(url, data={"revision": 0, "action": "confirm"}).status_code == 409
+    updated = client.post(url, data={
+        "revision": 1, "action": "save", "clue_0_A1": "Reviewed custom clue",
+    })
+    assert "Reviewed custom clue" in updated.text
+    confirmed = client.post(url, data={"revision": 2, "action": "confirm"}, follow_redirects=False)
+    assert confirmed.status_code == 303
+    repeated = client.post(url, data={"revision": 2, "action": "confirm"}, follow_redirects=False)
+    assert repeated.headers["location"] == confirmed.headers["location"]
+    with SessionLocal() as db:
+        sheets = db.query(BingoSheet).filter_by(assigned_email=email).all()
+        assert len(sheets) == 2
+        assert sum(sheet.clue_overrides.get("A1") == "Reviewed custom clue" for sheet in sheets) == 1
+
+    another = client.post("/admin/sheets", data={"student_email": email}, follow_redirects=False)
+    cancelled_url = another.headers["location"]
+    assert client.post(cancelled_url, data={"action": "cancel", "revision": 0}).status_code == 200
+    client.post(cancelled_url, data={"action": "confirm", "revision": 0})
+    with SessionLocal() as db:
+        assert db.query(BingoSheet).filter_by(assigned_email=email).count() == 2
+
+
+def test_student_cannot_access_teacher_preview(client):
+    email = unique_email("preview-access")
+    sheet = make_sheet(client, assigned_email=email)
+    response = client.post("/admin/sheets", data={"student_name": "Draft"}, follow_redirects=False)
+    url = response.headers["location"]
+    login_as(client, email)
+    assert client.get(url).status_code == 403
+    assert client.post(url, data={"action": "confirm", "revision": 0}).status_code == 403
+
+
+def test_save_preview_and_exit_can_be_resumed_and_assigned(client):
+    login_as(client, ADMIN_EMAIL)
+    email = unique_email("saved-preview")
+    client.post("/admin/students", data={"email": email, "student_name": "Saved Student"})
+    response = client.post("/admin/sheets", data={"student_email": email}, follow_redirects=False)
+    url = response.headers["location"]
+    saved = client.post(url, data={
+        "action": "save_exit", "revision": 0, "clue_0_A1": "Keep this edited clue",
+    })
+    assert saved.status_code == 200
+    assert "Drafts awaiting assignment" in saved.text
+    card = saved.text.split("Saved Student", 1)[1].split("</article>", 1)[0]
+    assert f'href="{url}"' in card
+    assert f'href="{url}"' in client.get("/admin", params={"q": "Saved Student"}).text
+    assert f'href="{url}"' not in client.get("/admin", params={"q": "unmatched-student-xyz"}).text
+    assert f'href="{url}"' in saved.text
+    with SessionLocal() as db:
+        assert db.query(BingoSheet).filter_by(assigned_email=email).count() == 0
+
+    resumed = client.get(url)
+    assert "Keep this edited clue" in resumed.text
+    assert 'value="1"' in resumed.text
+    confirmed = client.post(url, data={"action": "confirm", "revision": 1}, follow_redirects=False)
+    assert confirmed.status_code == 303
+    assert f'href="{url}"' not in client.get("/admin").text
+    with SessionLocal() as db:
+        sheet = db.query(BingoSheet).filter_by(assigned_email=email).one()
+        assert sheet.clue_overrides["A1"] == "Keep this edited clue"

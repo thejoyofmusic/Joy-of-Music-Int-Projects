@@ -115,6 +115,34 @@ Clues are available at `GET /api/bingo-questions`. Only admins can use
 Admin-only: `GET /api/sheets`, `GET /api/sheets/{sheet_id}` and `GET /api/export`
 (one `carnatic_bingo_data.json` download with all three tables).
 
+### Student import and sheet editing
+
+In the admin console, open **Import students from CSV** and download the header
+template. Use UTF-8 CSV with email, student_name, parent_name, parent_email and
+parent_whatsapp as column names. Only email is required.
+
+Imports accept up to 1,000 rows and files smaller than 2 MB. Existing student
+emails and repeated emails in the file are skipped and reported. Invalid rows
+prevent the entire batch from being imported. Adding a student manually with an
+existing email shows a warning.
+
+Use **Generate bingo sheets** for one sheet or **Create several sheets** for 1 to
+100 sheets on a student's card. Review every board, reshuffle individual sheets,
+or edit clues and the C3 question, then choose **Confirm and assign**. Students
+receive the batch only after confirmation. **Save and exit** stores your edits
+and returns to the admin console. Reopen the board under **Drafts awaiting assignment** on its student card
+to continue later. **Discard preview** removes it from that list. **Duplicate** opens a copy in preview with fresh progress. **Edit** lets admins change its individual clues and choose
+a different C3 question. Clue changes apply to that sheet, including its Word
+download. Edited clue squares become unmarked. Changing C3 resets its solution
+and attempt counts.
+
+### Question pool
+
+The source document contains 100 bingo questions. Headings and list numbers
+are excluded when reading clues. Each generated board draws 24 distinct clues.
+On startup, the app synchronizes the current source list and retains older
+clue records for sheets that already reference them.
+
 ### Reference template (`input_reference_bingo_sheet.docx`)
 
 The generator **copies** this file for every new sheet, then only replaces:

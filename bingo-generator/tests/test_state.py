@@ -22,3 +22,9 @@ def test_next_generation_params_increments(env_isolated, tmp_state_file):
     assert mcq_index == 0
     assert state["sheet_number"] == 1
     assert len(state["past_clue_orders"]) == 1
+
+
+def test_larger_pool_still_draws_exactly_24_clues(tmp_state_file):
+    _, clue_order, _, _ = next_generation_params(num_clues=100, state_path=tmp_state_file)
+    assert len(clue_order) == len(set(clue_order)) == 24
+    assert all(0 <= index < 100 for index in clue_order)

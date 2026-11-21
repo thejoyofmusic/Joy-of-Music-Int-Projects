@@ -11,6 +11,8 @@ Access model
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import random
@@ -39,6 +41,7 @@ from app.models import (
     MCQ_POSITION,
     BingoQuestionList,
     BingoSheet,
+    BingoPreview,
     MultipleChoiceQuestionList,
     User,
     new_sheet_id,
@@ -113,7 +116,11 @@ def ordered_clue_texts(db: Session, sheet: BingoSheet) -> List[str]:
         return []
     rows = db.query(BingoQuestionList).filter(BingoQuestionList.id.in_(question_ids)).all()
     by_id = {question.id: question.text for question in rows}
-    return [by_id.get(question_id, "") for question_id in question_ids]
+    overrides = sheet.clue_overrides or {}
+    return [
+        overrides.get(GRID_POSITIONS[index], by_id.get(question_id, ""))
+        for index, question_id in enumerate(question_ids)
+    ]
 
 
 def sheet_view(db: Session, sheet: BingoSheet) -> dict[str, Any]:
@@ -281,7 +288,7 @@ def ensure_unique_sheet_id(db: Session, requested: Optional[str]) -> Tuple[Optio
 
 def random_board(db: Session) -> Tuple[Optional[List[int]], Optional[int], Optional[str]]:
     """Draw a fresh board from the pools. Returns ``(question_ids, mcq_id, error)``."""
-    available_ids = [row[0] for row in db.query(BingoQuestionList.id).all()]
+    available_ids = [row[0] for row in db.query(BingoQuestionList.id).filter(BingoQuestionList.active.is_(True)).all()]
     if len(available_ids) < GRID_CELL_COUNT:
         return (
             None,
@@ -343,6 +350,7 @@ def create_sheet(
     *,
     sheet_id: Optional[str] = None,
     assigned_email: Optional[str] = None,
+    commit: bool = True,
 ) -> BingoSheet:
     """Persist a validated sheet and return it."""
     sheet = BingoSheet(
@@ -357,8 +365,11 @@ def create_sheet(
         multiple_choice_question_id=payload.multiple_choice_question_id,
     )
     db.add(sheet)
-    db.commit()
-    db.refresh(sheet)
+    if commit:
+        db.commit()
+        db.refresh(sheet)
+    else:
+        db.flush()
     return sheet
 
 
@@ -667,6 +678,8 @@ def admin_home(
     removed: str = "",
     deleted: int = 0,
     deleted_sheet: str = "",
+    created: int = 0,
+    saved: int = 0,
     db: Session = Depends(get_db),
 ):
     """Search sheets by ID, student or parent details, or assigned email."""
@@ -716,9 +729,31 @@ def admin_home(
         else:
             other_sheets.append(sheet)
 
+    previews_by_student = {email: [] for email in known_accounts}
+    other_previews = []
+    for draft in db.query(BingoPreview).filter_by(
+        owner_email=user.email, result_url=None,
+    ).order_by(BingoPreview.revision.desc(), BingoPreview.token).all():
+        email = normalize_email(draft.items[0].get("assigned_email"))
+        draft_fields = (
+            str(item.get(field) or "").casefold()
+            for item in draft.items
+            for field in ("sheet_id", "student_name", "parent_name", "parent_email",
+                          "parent_whatsapp", "assigned_email")
+        )
+        searchable = " ".join(draft_fields)
+        if search and email not in matched_accounts and not all(
+            term.casefold() in searchable for term in search.split()
+        ):
+            continue
+        if email in known_accounts:
+            previews_by_student[email].append(draft)
+        else:
+            other_previews.append(draft)
+
     accounts = [
         account for account in all_accounts
-        if account.email in matched_accounts or sheets_by_student[account.email]
+        if account.email in matched_accounts or sheets_by_student[account.email] or previews_by_student[account.email]
     ]
     return templates.TemplateResponse(
         request,
@@ -737,6 +772,10 @@ def admin_home(
             "removed": removed,
             "deleted": deleted,
             "deleted_sheet": deleted_sheet,
+            "created": created,
+            "saved": bool(saved),
+            "previews_by_student": previews_by_student,
+            "other_previews": other_previews,
         },
     )
 
@@ -767,6 +806,15 @@ async def admin_create_sheet(request: Request, db: Session = Depends(get_db)):
         form_data["parent_email"] = account.parent_email
         form_data["parent_whatsapp"] = account.parent_whatsapp
 
+    try:
+        count = int(form_data.get("count") or "1")
+        if not 1 <= count <= 100:
+            raise ValueError
+    except ValueError:
+        return error_page(request, "Choose between 1 and 100 sheets.", 422, user=user)
+    if count > 1 and form_data.get("sheet_id"):
+        return error_page(request, "Custom sheet IDs can only be used for one sheet.", 422, user=user)
+
     question_ids, mcq_id, pool_error = random_board(db)
     if pool_error:
         return error_page(request, pool_error, 400, user=user)
@@ -789,19 +837,162 @@ async def admin_create_sheet(request: Request, db: Session = Depends(get_db)):
     if id_error:
         return error_page(request, id_error, 409, user=user)
 
-    sheet = create_sheet(
-        db,
-        payload,
-        sheet_id=sheet_id,
-        assigned_email=payload.assigned_email,
+    items = []
+    reserved_ids = set()
+    for index in range(count):
+        if index:
+            question_ids, mcq_id, _ = random_board(db)
+            payload = payload.model_copy(update={
+                "question_list": question_ids, "multiple_choice_question_id": mcq_id,
+            })
+            sheet_id, id_error = ensure_unique_sheet_id(db, None)
+            if id_error:
+                return error_page(request, id_error, 409, user=user)
+        while sheet_id in reserved_ids:
+            sheet_id = new_sheet_id()
+        reserved_ids.add(sheet_id)
+        items.append({
+            **payload.model_dump(), "sheet_id": sheet_id, "clue_overrides": {},
+            "student_id": account.id if student_email else None,
+        })
+    return start_bingo_preview(db, user, items)
+
+
+def start_bingo_preview(db: Session, user: User, items: list[dict[str, Any]]) -> Response:
+    preview = BingoPreview(
+        token=secrets.token_urlsafe(24), owner_email=user.email, items=items, revision=0,
     )
-    logger.info(
-        "Admin %s created sheet %s for %s",
-        user.email,
-        sheet.sheet_id,
-        sheet.assigned_email or "unassigned",
-    )
-    return RedirectResponse(url=f"/admin/sheet/{sheet.sheet_id}", status_code=303)
+    db.add(preview)
+    db.commit()
+    return RedirectResponse(f"/admin/previews/{preview.token}", status_code=303)
+
+
+def find_bingo_preview(db: Session, token: str, user: User) -> Optional[BingoPreview]:
+    return db.query(BingoPreview).filter_by(token=token, owner_email=user.email).first()
+
+
+@app.get("/admin/previews/{token}")
+def bingo_preview_page(token: str, request: Request, db: Session = Depends(get_db)):
+    user, failure = admin_guard(request, db)
+    if failure:
+        return failure
+    preview = find_bingo_preview(db, token, user)
+    if preview is None:
+        return error_page(request, "Preview not found.", 404, user=user)
+    if preview.result_url:
+        return RedirectResponse(preview.result_url, status_code=303)
+    boards = []
+    for item in preview.items:
+        sheet = BingoSheet(**{key: value for key, value in item.items() if key != "student_id"}, marked_cells=[], mcq_solved=False)
+        boards.append(sheet_view(db, sheet))
+    return templates.TemplateResponse(request, "bingo_preview.html", {
+        "user": user, "preview": preview, "boards": boards,
+        "mcqs": db.query(MultipleChoiceQuestionList).order_by(MultipleChoiceQuestionList.id).all(),
+    })
+
+
+@app.post("/admin/previews/{token}")
+async def update_bingo_preview(token: str, request: Request, db: Session = Depends(get_db)):
+    user, failure = admin_guard(request, db)
+    if failure:
+        return failure
+    preview = find_bingo_preview(db, token, user)
+    if preview is None:
+        return error_page(request, "Preview not found.", 404, user=user)
+    if preview.result_url:
+        return RedirectResponse(preview.result_url, status_code=303)
+    form = await request.form(max_fields=4000)
+    try:
+        revision = int(str(form.get("revision")))
+    except (ValueError, TypeError):
+        return error_page(request, "Reload the preview and try again.", 409, user=user)
+    if preview.revision != revision:
+        return error_page(request, "This preview changed. Reload it before continuing.", 409, user=user)
+    action = str(form.get("action") or "")
+    if action not in {"save", "save_exit", "confirm", "cancel"} and not action.startswith("reshuffle:"):
+        return error_page(request, "Choose a preview action.", 422, user=user)
+
+    items = []
+    for index, original in enumerate(preview.items):
+        item = {**original}
+        sheet = BingoSheet(**{key: value for key, value in item.items() if key != "student_id"}, marked_cells=[], mcq_solved=False)
+        current_clues = sheet_view(db, sheet)["clues_by_position"]
+        clues = {
+            position: str(form.get(f"clue_{index}_{position}", text)).strip()
+            for position, text in current_clues.items()
+        }
+        if action != "cancel" and any(not text or len(text) > 500 for text in clues.values()):
+            return error_page(request, "Each clue needs between 1 and 500 characters.", 422, user=user)
+        try:
+            mcq_id = int(str(form.get(f"mcq_{index}", item["multiple_choice_question_id"])))
+        except ValueError:
+            return error_page(request, "Choose a C3 question.", 422, user=user)
+        if db.get(MultipleChoiceQuestionList, mcq_id) is None:
+            return error_page(request, "C3 question not found.", 422, user=user)
+        item["clue_overrides"] = clues
+        item["multiple_choice_question_id"] = mcq_id
+        items.append(item)
+
+    if action.startswith("reshuffle:"):
+        try:
+            index = int(action.split(":", 1)[1])
+            if not 0 <= index < len(items):
+                raise ValueError
+        except ValueError:
+            return error_page(request, "Sheet not found in this preview.", 422, user=user)
+        question_ids, mcq_id, error = random_board(db)
+        if error:
+            return error_page(request, error, 400, user=user)
+        items[index].update({
+            "question_list": question_ids, "multiple_choice_question_id": mcq_id,
+            "clue_overrides": {},
+        })
+
+    # Claim the revision before creating sheets so retries and double clicks cannot assign twice.
+    updated = db.query(BingoPreview).filter_by(
+        token=token, owner_email=user.email, revision=revision, result_url=None,
+    ).update({BingoPreview.revision: revision + 1, BingoPreview.items: items})
+    if not updated:
+        db.rollback()
+        return error_page(request, "This preview changed. Reload it before continuing.", 409, user=user)
+    if action == "confirm":
+        for item in items:
+            email = item.get("assigned_email")
+            if email:
+                account = db.query(User).filter_by(email=email).first()
+                if item.get("student_id") and (
+                    account is None or account.id != item["student_id"] or account.is_admin
+                ):
+                    db.rollback()
+                    return error_page(request, "The student is no longer available. Start a new preview.", 409, user=user)
+                if item.get("student_id"):
+                    item.update({
+                        "student_name": account.student_name or email.split("@")[0][:120],
+                        "parent_name": account.parent_name, "parent_email": account.parent_email,
+                        "parent_whatsapp": account.parent_whatsapp,
+                    })
+            sheet_id, error = ensure_unique_sheet_id(db, item["sheet_id"])
+            if error:
+                db.rollback()
+                return error_page(request, error, 409, user=user)
+            try:
+                payload = AdminSheetCreate.model_validate(item)
+            except ValidationError as exc:
+                db.rollback()
+                return error_page(request, validation_error_message(exc), 422, user=user)
+            sheet = create_sheet(
+                db, payload, sheet_id=sheet_id, assigned_email=email, commit=False,
+            )
+            sheet.clue_overrides = item["clue_overrides"]
+        preview.result_url = (
+            f"/admin/sheet/{sheet.sheet_id}" if len(items) == 1 else f"/admin?created={len(items)}"
+        )
+    elif action == "cancel":
+        preview.result_url = "/admin"
+    db.commit()
+    if action == "save_exit":
+        return RedirectResponse("/admin?saved=1", status_code=303)
+    return RedirectResponse(preview.result_url or f"/admin/previews/{token}", status_code=303)
 
 
 @app.get("/admin/sheet/{identifier}")
@@ -820,6 +1011,77 @@ def admin_sheet_detail(
     context = sheet_view(db, sheet)
     context.update({"user": user, "is_admin": True, "assign_error": None})
     return templates.TemplateResponse(request, "sheet_detail.html", context)
+
+
+@app.post("/admin/sheet/{identifier}/duplicate")
+def duplicate_sheet(identifier: str, request: Request, db: Session = Depends(get_db)):
+    user, failure = admin_guard(request, db)
+    if failure:
+        return failure
+    source = find_sheet(db, identifier)
+    if source is None:
+        return error_page(request, "Sheet not found.", 404, user=user)
+    sheet_id, error = ensure_unique_sheet_id(db, None)
+    if error:
+        return error_page(request, error, 409, user=user)
+    item = {
+        "sheet_id": sheet_id, "student_name": source.student_name,
+        "parent_name": source.parent_name, "parent_email": source.parent_email,
+        "parent_whatsapp": source.parent_whatsapp, "assigned_email": source.assigned_email,
+        "question_list": list(normalize_question_ids(source.question_list)),
+        "multiple_choice_question_id": source.multiple_choice_question_id,
+        "clue_overrides": dict(source.clue_overrides or {}),
+    }
+    return start_bingo_preview(db, user, [item])
+
+
+@app.get("/admin/sheet/{identifier}/edit")
+def edit_sheet_page(identifier: str, request: Request, db: Session = Depends(get_db)):
+    user, failure = admin_guard(request, db)
+    if failure:
+        return failure
+    sheet = find_sheet(db, identifier)
+    if sheet is None:
+        return error_page(request, "Sheet not found.", 404, user=user)
+    context = sheet_view(db, sheet)
+    context.update({
+        "user": user,
+        "mcqs": db.query(MultipleChoiceQuestionList).order_by(MultipleChoiceQuestionList.id).all(),
+    })
+    return templates.TemplateResponse(request, "edit_sheet.html", context)
+
+
+@app.post("/admin/sheet/{identifier}/edit")
+async def edit_sheet(identifier: str, request: Request, db: Session = Depends(get_db)):
+    user, failure = admin_guard(request, db)
+    if failure:
+        return failure
+    sheet = find_sheet(db, identifier)
+    if sheet is None:
+        return error_page(request, "Sheet not found.", 404, user=user)
+    form = await request.form()
+    clues = {position: str(form.get(position) or "").strip() for position in GRID_POSITIONS}
+    if any(not text or len(text) > 500 for text in clues.values()):
+        return error_page(request, "Each clue needs between 1 and 500 characters.", 422, user=user)
+    try:
+        mcq_id = int(str(form.get("mcq_id") or ""))
+    except ValueError:
+        return error_page(request, "Choose a multiple-choice question.", 422, user=user)
+    if db.get(MultipleChoiceQuestionList, mcq_id) is None:
+        return error_page(request, "Multiple-choice question not found.", 422, user=user)
+    current = sheet_view(db, sheet)["clues_by_position"]
+    changed = {position for position in GRID_POSITIONS if clues[position] != current[position]}
+    if mcq_id != sheet.multiple_choice_question_id:
+        sheet.mcq_solved = False
+        sheet.mcq_attempts = 0
+        sheet.mcq_incorrect_attempts = 0
+        sheet.mcq_wrong_choices = 0
+        changed.add(MCQ_POSITION)
+    sheet.marked_cells = [position for position in sheet.marked if position not in changed]
+    sheet.multiple_choice_question_id = mcq_id
+    sheet.clue_overrides = clues
+    db.commit()
+    return RedirectResponse(f"/admin/sheet/{sheet.sheet_id}", status_code=303)
 
 
 @app.post("/admin/sheet/{identifier}/delete")
@@ -956,6 +1218,11 @@ async def admin_add_student(request: Request, db: Session = Depends(get_db)):
         return error_page(request, validation_error_message(exc), 422, user=user)
 
     account = db.query(User).filter_by(email=email).first()
+    if account is not None and (account.registered_student or account.is_admin):
+        return error_page(
+            request, "This email already belongs to a student or administrator.", 409,
+            detail="Find the student in the list and use Edit details.", user=user,
+        )
     if account is None:
         account = User(email=email, role=auth.role_for_email(email))
         db.add(account)
@@ -967,6 +1234,77 @@ async def admin_add_student(request: Request, db: Session = Depends(get_db)):
     db.commit()
     logger.info("Admin %s saved student details for %s", user.email, email)
     return RedirectResponse(url=f"/admin?added={quote(email, safe='')}", status_code=303)
+
+
+@app.get("/admin/students/import-template")
+def student_import_template(request: Request, db: Session = Depends(get_db)):
+    user, failure = admin_guard(request, db)
+    if failure:
+        return failure
+    return Response(
+        "email,student_name,parent_name,parent_email,parent_whatsapp\r\n",
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="students-template.csv"'},
+    )
+
+
+@app.post("/admin/students/import")
+async def import_students(request: Request, db: Session = Depends(get_db)):
+    user, failure = admin_guard(request, db)
+    if failure:
+        return failure
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        return error_page(request, "Choose a CSV file.", 422, user=user)
+    content = await upload.read(2_000_001)
+    if len(content) > 2_000_000:
+        return error_page(request, "Choose a CSV smaller than 2 MB.", 422, user=user)
+    try:
+        reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")), strict=True)
+        if not reader.fieldnames or "email" not in reader.fieldnames:
+            raise ValueError("The CSV must have an email column.")
+        if len(set(reader.fieldnames)) != len(reader.fieldnames):
+            raise ValueError("The CSV has repeated column headers.")
+        rows = []
+        duplicates = []
+        errors = []
+        seen = set()
+        for row_number, row in enumerate(reader, start=2):
+            if row_number > 1001:
+                raise ValueError("Import at most 1,000 students at a time.")
+            email = normalize_email(row.get("email") or "")
+            if not auth.EMAIL_PATTERN.fullmatch(email) or None in row:
+                errors.append(f"Row {row_number}: enter a valid email and check the columns.")
+                continue
+            try:
+                details = StudentDetails.model_validate({
+                    key: value or "" for key, value in row.items()
+                    if key in StudentDetails.model_fields
+                })
+            except ValidationError as exc:
+                errors.append(f"Row {row_number}: {validation_error_message(exc)}")
+                continue
+            existing = db.query(User).filter(func.lower(User.email) == email).first()
+            if email in seen or (existing and (existing.registered_student or existing.is_admin)):
+                duplicates.append(f"Row {row_number}: {email}")
+                continue
+            seen.add(email)
+            rows.append((email, details, existing))
+    except (UnicodeDecodeError, csv.Error, ValueError) as exc:
+        return error_page(request, f"Could not import CSV: {exc}", 422, user=user)
+    if not errors:
+        for email, details, account in rows:
+            if account is None:
+                account = User(email=email, role=auth.role_for_email(email))
+                db.add(account)
+            account.registered_student = True
+            update_student_details(db, account, details.model_dump())
+        db.commit()
+    return templates.TemplateResponse(request, "import_students.html", {
+        "user": user, "imported": len(rows) if not errors else 0,
+        "duplicates": duplicates, "errors": errors,
+    }, status_code=422 if errors else 200)
 
 
 @app.post("/admin/students/{student_id}/edit")
@@ -1403,7 +1741,7 @@ async def generate_sheet(request: Request, db: Session = Depends(get_db)):
                 status_code=400,
             )
     else:
-        available_ids = [row[0] for row in db.query(BingoQuestionList.id).all()]
+        available_ids = [row[0] for row in db.query(BingoQuestionList.id).filter(BingoQuestionList.active.is_(True)).all()]
         if len(available_ids) < GRID_CELL_COUNT:
             return JSONResponse(
                 {
@@ -1496,6 +1834,7 @@ def sheet_payload(db: Session, sheet: BingoSheet) -> dict[str, Any]:
         "assigned_email": sheet.assigned_email,
         "marked_cells": sheet.marked,
         "question_list": normalize_question_ids(sheet.question_list),
+        "clue_overrides": dict(sheet.clue_overrides or {}),
         "multiple_choice_question_id": sheet.multiple_choice_question_id,
         "clues": ordered_clue_texts(db, sheet),
         "free_space_mcq": (
@@ -1514,7 +1853,7 @@ def sheet_payload(db: Session, sheet: BingoSheet) -> dict[str, Any]:
 @app.get("/api/bingo-questions")
 def api_bingo_questions(db: Session = Depends(get_db)):
     """Every stored clue, as JSON."""
-    rows = db.query(BingoQuestionList).order_by(BingoQuestionList.id).all()
+    rows = db.query(BingoQuestionList).filter(BingoQuestionList.active.is_(True)).order_by(BingoQuestionList.id).all()
     return [BingoQuestionListSchema.model_validate(row) for row in rows]
 
 
@@ -1560,7 +1899,7 @@ def api_export(request: Request, db: Session = Depends(get_db)):
     content = json.dumps(
         {
             "bingo_question_list": [
-                {"id": row.id, "text": row.text}
+                {"id": row.id, "text": row.text, "active": row.active}
                 for row in db.query(BingoQuestionList).order_by(BingoQuestionList.id).all()
             ],
             "multiple_choice_question_list": [

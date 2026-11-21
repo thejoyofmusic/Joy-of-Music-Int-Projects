@@ -29,7 +29,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, false
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, false, true
 from sqlalchemy.orm import relationship, validates
 
 from app.database import Base
@@ -155,6 +155,7 @@ class BingoQuestionList(Base):
 
     id = Column(Integer, primary_key=True)
     text = Column(String, nullable=False)
+    active = Column(Boolean, nullable=False, default=True, server_default=true())
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<BingoQuestionList id={self.id} text={self.text!r}>"
@@ -208,6 +209,7 @@ class BingoSheet(Base):
 
     # Exactly 24 integer ids into bingo_question_list, ordered A1..E5 skipping C3.
     question_list = Column(JSON, nullable=False)
+    clue_overrides = Column(JSON, nullable=True, default=dict)
 
     # Foreign key to the MCQ that owns the centre square.
     multiple_choice_question_id = Column(
@@ -233,3 +235,15 @@ class BingoSheet(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<BingoSheet id={self.id} sheet_id={self.sheet_id!r} student_name={self.student_name!r}>"
+
+
+class BingoPreview(Base):
+    """An administrator's editable batch awaiting confirmation."""
+
+    __tablename__ = "bingo_preview"
+
+    token = Column(String, primary_key=True)
+    owner_email = Column(String, nullable=False)
+    items = Column(JSON, nullable=False)
+    revision = Column(Integer, nullable=False, default=0)
+    result_url = Column(String, nullable=True)

@@ -78,6 +78,10 @@
             <div class="actions no-print">
                 <a class="download-btn" href="/sheet/{{ sheet.sheet_id }}/download">⬇ Download printable .docx</a>
                 {% if is_admin %}
+                <a class="btn" href="/admin/sheet/{{ sheet.sheet_id }}/edit">Edit sheet and clues</a>
+                <form method="post" action="/admin/sheet/{{ sheet.sheet_id }}/duplicate">
+                    <button type="submit" class="btn secondary">Duplicate sheet</button>
+                </form>
                 <button type="button" class="btn secondary" onclick="window.print()">🖨 Print this page</button>
                 {% endif %}
             </div>
