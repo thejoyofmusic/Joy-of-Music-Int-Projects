@@ -80,7 +80,7 @@ def test_migrations_create_expected_schema(client):
 
 def test_seed_is_idempotent(client):
     with SessionLocal() as db:
-        assert db.query(BingoQuestionList).count() == 24
+        assert db.query(BingoQuestionList).count() == 100
         assert db.query(MultipleChoiceQuestionList).count() == 20
         assert seed_from_docx(db) == {
             "bingo_questions": 0,
@@ -248,7 +248,7 @@ def test_api_questions_return_json_arrays(client):
     clues = client.get("/api/bingo-questions")
     assert clues.status_code == 200
     assert clues.headers["content-type"].startswith("application/json")
-    assert len(clues.json()) == 24
+    assert len(clues.json()) == 100
     assert set(clues.json()[0]) == {"id", "text"}
 
     mcqs = client.get("/api/mc-questions")
@@ -282,7 +282,7 @@ def test_api_export_downloads_everything(client, created_sheet):
     assert "carnatic_bingo_data.json" in response.headers["content-disposition"]
 
     body = response.json()
-    assert len(body["bingo_question_list"]) == 24
+    assert len(body["bingo_question_list"]) == 100
     assert len(body["multiple_choice_question_list"]) == 20
     assert any(sheet["id"] == created_sheet.id for sheet in body["bingo_sheet"])
 
@@ -330,3 +330,36 @@ def test_verify_answer_rejects_bad_input(client):
         == 400
     )
     assert client.post("/verify-answer", json={"mcqId": 1}).status_code == 400
+
+
+def test_clue_sync_retains_legacy_ids_and_only_draws_current_questions(tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.database import Base
+    from app.seed import seed_bingo_questions
+    from app.main import random_board
+    from conftest import BINGO_ROOT
+
+    isolated = create_engine(f"sqlite:///{tmp_path / 'pool.db'}")
+    Base.metadata.create_all(isolated)
+    with Session(isolated) as db:
+        legacy = BingoQuestionList(text="A legacy clue used on an older sheet")
+        shared = BingoQuestionList(text="Khanda Chapu")
+        db.add_all([legacy, shared])
+        db.add(MultipleChoiceQuestionList(
+            question="Test question", options=["A", "B", "C", "D"], answer_key="A",
+        ))
+        db.commit()
+        legacy_id, shared_id = legacy.id, shared.id
+
+        assert seed_bingo_questions(db, BINGO_ROOT) == 99
+        assert db.get(BingoQuestionList, legacy_id).text == "A legacy clue used on an older sheet"
+        assert not db.get(BingoQuestionList, legacy_id).active
+        assert db.get(BingoQuestionList, shared_id).active
+        assert db.query(BingoQuestionList).filter_by(active=True).count() == 100
+        assert seed_bingo_questions(db, BINGO_ROOT) == 0
+        questions, _, error = random_board(db)
+        assert error is None
+        assert len(set(questions)) == 24
+        assert legacy_id not in questions
+    isolated.dispose()

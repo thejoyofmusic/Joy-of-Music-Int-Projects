@@ -71,14 +71,23 @@ def _normalize_text(text: str) -> str:
 def parse_concert_clues(path: str) -> list[str]:
     doc = Document(path)
     clues: list[str] = []
-    for p in doc.paragraphs:
-        text = _normalize_text(p.text)
-        if not text or text == CONCERT_TITLE_SKIP:
+    seen = set()
+    for paragraph in doc.paragraphs:
+        text = _normalize_text(paragraph.text)
+        style = paragraph.style.name.casefold()
+        if not text or style.startswith(("heading", "title", "subtitle")):
             continue
-        clues.append(text)
-    if len(clues) != EXPECTED_CLUES:
+        if text.casefold() in {CONCERT_TITLE_SKIP.casefold(), "bingo questions"}:
+            continue
+        # Word numbering is stored separately; strip typed list markers as well.
+        text = re.sub(r"^(?:[•●▪]\s*|\d+[.)]\s+)", "", text).strip()
+        key = " ".join(text.casefold().split())
+        if text and key not in seen:
+            clues.append(text)
+            seen.add(key)
+    if len(clues) < EXPECTED_CLUES:
         raise ValueError(
-            f"Expected {EXPECTED_CLUES} concert clues in {path}, found {len(clues)}"
+            f"Expected at least {EXPECTED_CLUES} concert clues in {path}, found {len(clues)}"
         )
     return clues
 
@@ -155,8 +164,9 @@ def save_state(state: dict[str, Any], state_path: str | None = None) -> None:
 def _unique_clue_order(past_orders: list[list[int]], num_clues: int) -> list[int]:
     past_set = {tuple(o) for o in past_orders}
     for _ in range(SHUFFLE_MAX_RETRIES):
-        order = list(range(num_clues))
-        random.shuffle(order)
+        if num_clues < EXPECTED_CLUES:
+            raise ValueError(f"Need at least {EXPECTED_CLUES} clues to generate a board")
+        order = random.sample(range(num_clues), EXPECTED_CLUES)
         if tuple(order) not in past_set:
             return order
     raise RuntimeError(

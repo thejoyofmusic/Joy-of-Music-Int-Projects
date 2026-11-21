@@ -5,7 +5,8 @@ and ``input_multiple_choice_Q&A.docx``). ``carnatic_bingo_generator`` already
 parses those files with python-docx, so the web backend reuses the same parser to
 keep the CLI and the app in sync.
 
-Seeding is idempotent: tables that already contain rows are left untouched.
+Clues are synchronized by text while retaining records used by older sheets.
+MCQs are inserted only when their table is empty.
 """
 
 from __future__ import annotations
@@ -28,19 +29,31 @@ logger = logging.getLogger(__name__)
 
 
 def seed_bingo_questions(db: Session, bingo_root: Path | None = None) -> int:
-    """Insert the clue list when the table is empty. Returns rows added."""
-    if db.query(BingoQuestionList).count() > 0:
-        return 0
-
+    """Sync the current clue source without changing IDs used by existing sheets."""
     source = (bingo_root or PROJECT_ROOT) / CONCERT_LIST_FILENAME
     if not source.is_file():
         logger.warning("Clue source not found, skipping clue seed: %s", source)
         return 0
 
     clues = parse_concert_clues(str(source))
-    db.add_all(BingoQuestionList(text=clue) for clue in clues)
+    existing = db.query(BingoQuestionList).order_by(BingoQuestionList.id).all()
+    by_text = {}
+    for question in existing:
+        key = " ".join(question.text.casefold().split())
+        by_text.setdefault(key, question)
+        question.active = False
+    added = 0
+    for clue in clues:
+        key = " ".join(clue.casefold().split())
+        question = by_text.get(key)
+        if question is None:
+            question = BingoQuestionList(text=clue, active=True)
+            db.add(question)
+            by_text[key] = question
+            added += 1
+        question.active = True
     db.commit()
-    return len(clues)
+    return added
 
 
 def seed_multiple_choice_questions(db: Session, bingo_root: Path | None = None) -> int:

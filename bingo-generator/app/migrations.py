@@ -189,6 +189,33 @@ MIGRATIONS: tuple[Migration, ...] = (
             "ALTER TABLE bingo_sheet ADD COLUMN mcq_wrong_choices INTEGER NOT NULL DEFAULT 0",
         ),
     ),
+    Migration(
+        version=10,
+        name="sheet_clue_edits",
+        statements=("ALTER TABLE bingo_sheet ADD COLUMN clue_overrides JSON",),
+    ),
+    Migration(
+        version=11,
+        name="bingo_assignment_previews",
+        statements=(
+            """
+            CREATE TABLE bingo_preview (
+                token VARCHAR PRIMARY KEY,
+                owner_email VARCHAR NOT NULL,
+                items JSON NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 0,
+                result_url VARCHAR
+            )
+            """,
+        ),
+    ),
+    Migration(
+        version=12,
+        name="current_question_pool",
+        statements=(
+            "ALTER TABLE bingo_question_list ADD COLUMN active BOOLEAN NOT NULL DEFAULT TRUE",
+        ),
+    ),
 )
 
 

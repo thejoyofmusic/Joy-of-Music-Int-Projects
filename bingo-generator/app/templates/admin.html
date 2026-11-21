@@ -91,6 +91,12 @@
             Add students by Google email. Their boards appear on their dashboard after you assign a sheet.
         </p>
 
+        {% if saved %}
+        <div class="notice" role="status">Saved. Reopen the draft under the student’s name when you are ready.</div>
+        {% endif %}
+        {% if created %}
+        <div class="notice" role="status">Created and assigned {{ created }} bingo sheets.</div>
+        {% endif %}
         {% if added %}
         <div class="notice" style="border-color:#38a169;background:#f0fff4;color:#22543d;">
             Student account ready for <strong>{{ added }}</strong>. Assign a sheet when they are ready to play.
@@ -140,12 +146,39 @@
             </form>
         </div>
 
+        <details class="panel">
+            <summary>Import students from CSV</summary>
+            <p class="hint">Use email, student_name, parent_name, parent_email and parent_whatsapp as column names. Only email is required. Duplicate emails are skipped and listed for review.</p>
+            <a href="/admin/students/import-template">Download CSV template</a>
+            <form method="post" action="/admin/students/import" enctype="multipart/form-data">
+                <div class="row-actions">
+                    <label for="student-csv">Student CSV</label>
+                    <input type="file" id="student-csv" name="file" accept=".csv,text/csv" required>
+                    <button class="btn" type="submit">Import students</button>
+                </div>
+            </form>
+        </details>
+
         <form class="search" id="admin-search" method="get" action="/admin" role="search">
             <input type="search" name="q" value="{{ query }}" placeholder="Name, email, WhatsApp or sheet ID" aria-label="Search students and bingo sheets" autocomplete="off">
             <button type="submit" class="btn">Search</button>
             <button type="button" class="btn secondary" id="clear-search" {% if not query %}hidden{% endif %}>Clear</button>
             <span id="search-summary" class="meta" role="status">{{ accounts|length }} student{{ '' if accounts|length == 1 else 's' }} · {{ matched }} sheet{{ '' if matched == 1 else 's' }}</span>
         </form>
+
+        {% macro draft_list(drafts) %}
+            {% if drafts %}
+            <h3>Drafts awaiting assignment</h3>
+            <ul>
+                {% for draft in drafts %}
+                <li>
+                    {{ draft.items|length }} bingo sheet{{ '' if draft.items|length == 1 else 's' }}
+                    · <a href="/admin/previews/{{ draft.token }}">Continue editing</a>
+                </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        {% endmacro %}
 
         {% macro sheet_table(sheets, needs_assignment=false) %}
         <div class="table-wrap">
@@ -176,6 +209,10 @@
                         <td class="links">
                             <div class="sheet-actions">
                                 <a href="/admin/sheet/{{ row.sheet_id }}">Open</a>
+                                <a href="/admin/sheet/{{ row.sheet_id }}/edit">Edit</a>
+                                <form method="post" action="/admin/sheet/{{ row.sheet_id }}/duplicate">
+                                    <button type="submit" class="btn secondary">Duplicate</button>
+                                </form>
                                 <a href="/sheet/{{ row.sheet_id }}/download">Download</a>
                                 <form method="post" action="/admin/sheet/{{ row.sheet_id }}/delete"
                                       onsubmit="return confirm('Permanently delete this bingo sheet and its saved progress?');">
@@ -220,14 +257,24 @@
                             </div>
                             <form method="post" action="/admin/sheets">
                                 <input type="hidden" name="student_email" value="{{ account.email }}">
-                                <button type="submit" class="btn">Create bingo sheet</button>
+                                <button type="submit" class="btn">Generate bingo sheets</button>
                             </form>
                         </div>
+                        {{ draft_list(previews_by_student[account.email]) }}
                         {% if student_sheets %}
                         {{ sheet_table(student_sheets) }}
                         {% else %}
-                        <p class="hint">No bingo sheets yet.</p>
+                        <p class="hint">No assigned bingo sheets yet.</p>
                         {% endif %}
+                        <details class="student-options">
+                            <summary>Create several sheets</summary>
+                            <form method="post" action="/admin/sheets">
+                                <input type="hidden" name="student_email" value="{{ account.email }}">
+                                <label for="sheet-count-{{ account.id }}">Number of sheets</label>
+                                <input type="number" id="sheet-count-{{ account.id }}" name="count" min="1" max="100" value="5" required>
+                                <button type="submit" class="btn">Generate bingo sheets</button>
+                            </form>
+                        </details>
                         <details class="student-options">
                             <summary>Edit details</summary>
                             <form method="post" action="/admin/students/{{ account.id }}/edit">
@@ -273,10 +320,11 @@
                 </div>
             </section>
 
-            {% if other_sheets %}
+            {% if other_sheets or other_previews %}
             <section class="panel" aria-labelledby="other-sheets-heading">
                 <h2 id="other-sheets-heading">Other bingo sheets</h2>
-                {{ sheet_table(other_sheets, true) }}
+                {{ draft_list(other_previews) }}
+                {% if other_sheets %}{{ sheet_table(other_sheets, true) }}{% endif %}
             </section>
             {% endif %}
         </div>

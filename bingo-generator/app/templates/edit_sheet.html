@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Edit {{ sheet.sheet_id }} · Carnatic Bingo</title>
+<style>
+* { box-sizing: border-box; }
+body { font-family: system-ui, sans-serif; background: #f4f6f8; color: #243b53; padding: 20px; }
+main { max-width: 950px; margin: auto; background: white; padding: 24px; border-radius: 10px; }
+.clues { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin: 20px 0; }
+label { display: block; font-weight: 600; margin-bottom: 6px; }
+textarea, select { width: 100%; padding: 8px; font: inherit; }
+button { background: #0066cc; color: white; padding: 10px 16px; border: 0; border-radius: 5px; font: inherit; cursor: pointer; }
+a { color: #0066cc; }
+</style>
+</head>
+<body><main>
+<a href="/admin/sheet/{{ sheet.sheet_id }}">Back to sheet</a>
+<h1>Edit sheet {{ sheet.sheet_id }}</h1>
+<p>Clue changes apply to this sheet and its printable download. Edited squares become unmarked. Changing the C3 question resets its answer and attempts.</p>
+<form method="post" action="/admin/sheet/{{ sheet.sheet_id }}/edit">
+    <label for="mcq">C3 multiple-choice question</label>
+    <select name="mcq_id" id="mcq" required>
+        {% for question in mcqs %}
+        <option value="{{ question.id }}"{% if question.id == sheet.multiple_choice_question_id %} selected{% endif %}>{{ question.question }}</option>
+        {% endfor %}
+    </select>
+    <div class="clues">
+        {% for position, clue in clues_by_position.items() %}
+        <div>
+            <label for="clue-{{ position }}">{{ position }}</label>
+            <textarea name="{{ position }}" id="clue-{{ position }}" rows="3" maxlength="500" required>{{ clue }}</textarea>
+        </div>
+        {% endfor %}
+    </div>
+    <button type="submit">Save sheet</button>
+</form>
+</main></body>
+</html>
